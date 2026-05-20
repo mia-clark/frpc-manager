@@ -1,167 +1,236 @@
-import React, { useEffect, useState } from 'react';
-import { Layout, Menu, Button, Space, Typography, message, Modal } from 'antd';
+import React, { useEffect, useState, useMemo } from 'react';
+import { Layout, Menu, Button, Space, Typography, Modal, Tag, Tooltip, theme as antdTheme, App } from 'antd';
 import {
   DashboardOutlined,
-  SettingOutlined,
+  ClusterOutlined,
   FileTextOutlined,
+  AlertOutlined,
+  HddOutlined,
+  ToolOutlined,
+  SettingOutlined,
   SwapOutlined,
   PoweroffOutlined,
-  LinkOutlined,
   SafetyCertificateOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import client, { getAPIToken, clearAPIToken } from '../api/client';
+import ThemeSwitcher from '../theme/ThemeSwitcher';
+import { useEventStream } from '../events/EventStreamContext';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
+type MenuItem = Required<MenuProps>['items'][number];
+
 const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [version, setVersion] = useState<string>('获取中...');
-  const [frpVer, setFrpVer] = useState<string>('');
-  const [isConnected, setIsConnected] = useState<boolean>(true);
+  const { message } = App.useApp();
+  const { token } = antdTheme.useToken();
+  const stream = useEventStream();
 
-  // 如果没有 Token，直接重定向到登录页
+  const [version, setVersion] = useState<string>('获取中…');
+  const [frpVer, setFrpVer] = useState<string>('');
+
   useEffect(() => {
-    const token = getAPIToken();
-    if (!token) {
+    const t = getAPIToken();
+    if (!t) {
       navigate('/login');
     } else {
       fetchSystemVersion();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate]);
 
-  // 获取后端 Go 程序版本号
   const fetchSystemVersion = async () => {
     try {
       const resp = await client.get('/api/v1/version');
       if (resp.status === 200) {
-        setVersion(resp.data.version || '1.0.0');
+        setVersion(resp.data.version || '');
         setFrpVer(resp.data.frp || '');
-        setIsConnected(true);
       }
-    } catch (err) {
-      setIsConnected(false);
-      message.error('无法连接到 Go 服务端，请检查 Token 权限或后端运行状态');
+    } catch {
+      // 静默：实时连接状态由 WebSocket 反映
     }
   };
 
   const handleLogout = () => {
     Modal.confirm({
       title: '确认注销登录？',
-      content: '退出后将清除保存在本地的 API 令牌，需重新输入才能使用控制台。',
+      content: '退出后将清除本地 API 令牌，需重新输入才能继续使用。',
       okText: '退出',
       cancelText: '取消',
+      okButtonProps: { danger: true },
       onOk: () => {
         clearAPIToken();
-        message.success('注销成功');
+        message.success('已安全登出');
         navigate('/login');
       },
     });
   };
 
-  const menuItems = [
-    {
-      key: '/dashboard',
-      icon: <DashboardOutlined />,
-      label: '仪表盘大盘',
-    },
-    {
-      key: '/configs',
-      icon: <SettingOutlined />,
-      label: 'FRP 实例管理',
-    },
-    {
-      key: '/logs',
-      icon: <FileTextOutlined />,
-      label: '实时日志流',
-    },
-    {
-      key: '/import-export',
-      icon: <SwapOutlined />,
-      label: '备份导入导出',
-    },
-  ];
+  const menuItems: MenuItem[] = useMemo(
+    () => [
+      {
+        key: 'g-overview',
+        type: 'group',
+        label: '总览',
+        children: [
+          { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
+          { key: '/events', icon: <AlertOutlined />, label: '事件中心' },
+        ],
+      },
+      {
+        key: 'g-runtime',
+        type: 'group',
+        label: '运行',
+        children: [
+          { key: '/configs', icon: <ClusterOutlined />, label: 'FRP 实例' },
+          { key: '/logs', icon: <FileTextOutlined />, label: '日志流' },
+        ],
+      },
+      {
+        key: 'g-host',
+        type: 'group',
+        label: '主机',
+        children: [{ key: '/system', icon: <HddOutlined />, label: '系统监控' }],
+      },
+      {
+        key: 'g-tools',
+        type: 'group',
+        label: '工具',
+        children: [
+          { key: '/tools/validate', icon: <ToolOutlined />, label: '配置校验' },
+          { key: '/tools/nat', icon: <ApiOutlined />, label: 'NAT 探测' },
+          { key: '/import-export', icon: <SwapOutlined />, label: '导入 / 导出' },
+        ],
+      },
+      {
+        key: 'g-system',
+        type: 'group',
+        label: '系统',
+        children: [{ key: '/settings', icon: <SettingOutlined />, label: '设置' }],
+      },
+    ],
+    []
+  );
+
+  // 根据 path 选中：取首段或两段做匹配
+  const selectedKey = useMemo(() => {
+    const p = location.pathname;
+    const candidates = ['/tools/validate', '/tools/nat', '/import-export'];
+    for (const c of candidates) if (p.startsWith(c)) return c;
+    const seg = '/' + p.split('/').filter(Boolean)[0];
+    return seg || '/dashboard';
+  }, [location.pathname]);
+
+  const connState = stream.state;
+  const connTone: Record<typeof connState, { dot: string; text: string; label: string }> = {
+    idle: { dot: token.colorTextDisabled, text: token.colorTextSecondary, label: '未连接' },
+    connecting: { dot: token.colorWarning, text: token.colorWarning, label: '连接中…' },
+    open: { dot: token.colorSuccess, text: token.colorSuccess, label: '事件流已就绪' },
+    closed: { dot: token.colorError, text: token.colorError, label: '已断开' },
+    error: { dot: token.colorError, text: token.colorError, label: '连接异常' },
+  };
+  const tone = connTone[connState];
 
   return (
-    <Layout style={{ minHeight: '100vh', background: 'transparent' }}>
-      {/* 侧边栏 */}
+    <Layout style={{ minHeight: '100vh' }}>
       <Sider
-        width={240}
+        width={232}
         theme="dark"
-        style={{
-          background: 'rgba(15, 18, 22, 0.85)',
-          backdropFilter: 'blur(10px)',
-          borderRight: '1px solid rgba(255, 255, 255, 0.05)',
-        }}
+        breakpoint="lg"
+        collapsedWidth={64}
+        style={{ position: 'sticky', top: 0, height: '100vh' }}
       >
-        <div style={{
-          height: 64,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-          gap: '8px'
-        }}>
-          <SafetyCertificateOutlined style={{ fontSize: '20px', color: '#1677ff' }} />
-          <Text strong style={{ color: '#fff', fontSize: '16px', letterSpacing: '1px' }}>FRP Manager</Text>
+        <div
+          style={{
+            height: 56,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 16px',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          <SafetyCertificateOutlined style={{ fontSize: 22, color: token.colorPrimary }} />
+          <Text strong style={{ color: '#fff', fontSize: 15, letterSpacing: 0.5 }}>
+            FRP Manager
+          </Text>
         </div>
         <Menu
           theme="dark"
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[selectedKey]}
           onClick={({ key }) => navigate(key)}
           items={menuItems}
-          style={{ background: 'transparent', marginTop: '16px' }}
+          style={{ borderInlineEnd: 'none', marginTop: 8 }}
         />
       </Sider>
 
-      {/* 主工作区 */}
-      <Layout style={{ background: 'transparent' }}>
-        {/* 顶栏 */}
-        <Header style={{
-          background: 'rgba(15, 18, 22, 0.65)',
-          backdropFilter: 'blur(10px)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-          padding: '0 24px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          height: 64
-        }}>
-          <Space size="middle">
-            <span className={isConnected ? 'status-indicator-running' : 'status-indicator-error'} />
-            <Text style={{ color: isConnected ? '#52c41a' : '#ff4d4f' }}>
-              {isConnected ? 'API 已联通' : 'API 已断开'}
-            </Text>
+      <Layout>
+        <Header
+          style={{
+            background: token.colorBgContainer,
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            padding: '0 20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            height: 56,
+            position: 'sticky',
+            top: 0,
+            zIndex: 5,
+          }}
+        >
+          <Space size="middle" align="center">
+            <Tooltip title={tone.label}>
+              <Space size={8} align="center">
+                <span
+                  aria-label={tone.label}
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: tone.dot,
+                    boxShadow: `0 0 0 3px ${tone.dot}22`,
+                    display: 'inline-block',
+                  }}
+                />
+                <Text style={{ color: tone.text, fontSize: 13 }}>{tone.label}</Text>
+              </Space>
+            </Tooltip>
+            {stream.lastSeq > 0 && (
+              <Tag bordered={false} color="processing" style={{ marginInlineStart: 4 }}>
+                seq #{stream.lastSeq}
+              </Tag>
+            )}
           </Space>
 
-          <Space size="large">
-            <Space size="small">
-              <LinkOutlined style={{ color: 'rgba(255,255,255,0.45)' }} />
-              <Text type="secondary" style={{ fontSize: '13px' }}>
-                Daemon: v{version} {frpVer && `(frp: ${frpVer})`}
-              </Text>
-            </Space>
-            <Button
-              type="text"
-              danger
-              icon={<PoweroffOutlined />}
-              onClick={handleLogout}
-            >
-              安全登出
+          <Space size="middle" align="center">
+            <Tooltip title="后端版本">
+              <Tag bordered={false}>
+                Daemon v{version || '—'}
+                {frpVer ? ` · frp ${frpVer}` : ''}
+              </Tag>
+            </Tooltip>
+            <ThemeSwitcher />
+            <Button type="text" danger icon={<PoweroffOutlined />} onClick={handleLogout}>
+              登出
             </Button>
           </Space>
         </Header>
 
-        {/* 内容区 */}
-        <Content style={{
-          margin: '24px',
-          padding: '0',
-          overflowY: 'auto',
-          height: 'calc(100vh - 112px)'
-        }}>
+        <Content
+          style={{
+            margin: 20,
+            padding: 0,
+            background: 'transparent',
+            minHeight: 'calc(100vh - 96px)',
+          }}
+        >
           <Outlet />
         </Content>
       </Layout>

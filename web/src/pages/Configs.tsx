@@ -449,15 +449,48 @@ const Configs: React.FC = () => {
   // 提交代理配置 Drawer 表单
   const handleSaveProxy = async (values: any) => {
     try {
-      const payload = {
+      const splitCSV = (v?: string): string[] | undefined =>
+        v ? v.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined;
+      const payload: Record<string, unknown> = {
         name: values.name,
         type: values.type,
         localIP: values.localIP || '127.0.0.1',
         localPort: values.localPort,
-        remotePort: values.remotePort,
-        customDomains: values.customDomains ? values.customDomains.split(',') : undefined,
-        // 其他字段...
       };
+      const t = values.type as string;
+      // 通用 / TCP / UDP
+      if (t === 'tcp' || t === 'udp') {
+        payload.remotePort = values.remotePort;
+      }
+      // tcpmux：基于域名复用
+      if (t === 'tcpmux') {
+        payload.multiplexer = values.multiplexer || 'httpconnect';
+        payload.customDomains = splitCSV(values.customDomains);
+        if (values.routeByHTTPUser) payload.routeByHTTPUser = values.routeByHTTPUser;
+      }
+      // HTTP / HTTPS
+      if (t === 'http' || t === 'https') {
+        payload.customDomains = splitCSV(values.customDomains);
+        if (values.subdomain) payload.subdomain = values.subdomain;
+        if (values.locations) payload.locations = splitCSV(values.locations);
+        if (values.hostHeaderRewrite) payload.hostHeaderRewrite = values.hostHeaderRewrite;
+        if (values.httpUser) payload.httpUser = values.httpUser;
+        if (values.httpPassword) payload.httpPassword = values.httpPassword;
+      }
+      // STCP / SUDP / XTCP：安全/直连模式
+      if (t === 'stcp' || t === 'sudp' || t === 'xtcp') {
+        payload.secretKey = values.secretKey;
+        if (values.allowUsers) payload.allowUsers = splitCSV(values.allowUsers);
+      }
+      // 插件透传
+      if (values.pluginName) {
+        const plugin: Record<string, unknown> = { type: values.pluginName };
+        if (values.pluginLocalAddr) plugin.localAddr = values.pluginLocalAddr;
+        if (values.pluginLocalPath) plugin.localPath = values.pluginLocalPath;
+        if (values.pluginHTTPUser) plugin.httpUser = values.pluginHTTPUser;
+        if (values.pluginHTTPPassword) plugin.httpPassword = values.pluginHTTPPassword;
+        payload.plugin = plugin;
+      }
       if (editingProxy) {
         // 修改代理
         await client.put(`/api/v1/configs/${activeConfigId}/proxies/${editingProxy.name}`, payload);
@@ -478,6 +511,7 @@ const Configs: React.FC = () => {
   const openProxyDrawer = (proxyItem?: any) => {
     setEditingProxy(proxyItem);
     if (proxyItem) {
+      const pl = proxyItem.plugin || {};
       proxyForm.setFieldsValue({
         name: proxyItem.name,
         type: proxyItem.type || 'tcp',
@@ -485,6 +519,20 @@ const Configs: React.FC = () => {
         localPort: proxyItem.localPort,
         remotePort: proxyItem.remotePort,
         customDomains: proxyItem.customDomains ? proxyItem.customDomains.join(',') : '',
+        subdomain: proxyItem.subdomain,
+        locations: proxyItem.locations ? proxyItem.locations.join(',') : '',
+        hostHeaderRewrite: proxyItem.hostHeaderRewrite,
+        httpUser: proxyItem.httpUser,
+        httpPassword: proxyItem.httpPassword,
+        multiplexer: proxyItem.multiplexer,
+        routeByHTTPUser: proxyItem.routeByHTTPUser,
+        secretKey: proxyItem.secretKey,
+        allowUsers: proxyItem.allowUsers ? proxyItem.allowUsers.join(',') : '',
+        pluginName: pl.type,
+        pluginLocalAddr: pl.localAddr,
+        pluginLocalPath: pl.localPath,
+        pluginHTTPUser: pl.httpUser,
+        pluginHTTPPassword: pl.httpPassword,
       });
     } else {
       proxyForm.resetFields();
@@ -1167,7 +1215,7 @@ const Configs: React.FC = () => {
       {/* 新建/编辑代理 Drawer */}
       <Drawer
         title={editingProxy ? '编辑代理规则' : '添加代理规则'}
-        width={400}
+        width={520}
         onClose={() => setProxyDrawerOpen(false)}
         open={proxyDrawerOpen}
         bodyStyle={{ paddingBottom: 80 }}
@@ -1189,58 +1237,179 @@ const Configs: React.FC = () => {
             <Input placeholder="ssh" disabled={!!editingProxy} />
           </Form.Item>
 
-          <Form.Item label="穿透协议类型" name="type" rules={[{ required: true }]}>
-            <Tabs
-              type="card"
-              size="small"
-              onChange={(key) => proxyForm.setFieldsValue({ type: key })}
-              items={[
-                { key: 'tcp', label: 'TCP' },
-                { key: 'udp', label: 'UDP' },
-                { key: 'http', label: 'HTTP' },
-                { key: 'https', label: 'HTTPS' },
+          <Form.Item label="穿透协议类型" name="type" rules={[{ required: true }]} initialValue="tcp">
+            <Select
+              options={[
+                { value: 'tcp', label: 'TCP — 通用端口转发' },
+                { value: 'udp', label: 'UDP — 通用 UDP 转发' },
+                { value: 'http', label: 'HTTP — 网站/API' },
+                { value: 'https', label: 'HTTPS — 直通 TLS' },
+                { value: 'tcpmux', label: 'TCPMUX — 端口复用 (httpconnect)' },
+                { value: 'stcp', label: 'STCP — 安全 P2P (需共享密钥)' },
+                { value: 'sudp', label: 'SUDP — 安全 P2P UDP' },
+                { value: 'xtcp', label: 'XTCP — NAT 穿透 P2P' },
               ]}
             />
           </Form.Item>
 
-          <Form.Item label="本地监听 IP" name="localIP" initialValue="127.0.0.1">
-            <Input placeholder="127.0.0.1" />
-          </Form.Item>
-
-          <Form.Item
-            label="本地映射端口"
-            name="localPort"
-            rules={[{ required: true, message: '请输入本地端口' }]}
-          >
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="22" />
-          </Form.Item>
-
-          {/* 根据协议动态展示 */}
           <Form.Item
             noStyle
-            shouldUpdate={(prevValues, currentValues) => prevValues.type !== currentValues.type}
+            shouldUpdate={(prev, cur) => prev.type !== cur.type || prev.pluginName !== cur.pluginName}
+          >
+            {({ getFieldValue }) => {
+              const usingPlugin = !!getFieldValue('pluginName');
+              return (
+                <>
+                  <Form.Item label="本地监听 IP" name="localIP" initialValue="127.0.0.1">
+                    <Input placeholder="127.0.0.1" disabled={usingPlugin} />
+                  </Form.Item>
+                  <Form.Item
+                    label="本地映射端口"
+                    name="localPort"
+                    rules={usingPlugin ? [] : [{ required: true, message: '请输入本地端口' }]}
+                  >
+                    <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="22" disabled={usingPlugin} />
+                  </Form.Item>
+                </>
+              );
+            }}
+          </Form.Item>
+
+          {/* 类型相关字段 */}
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) => prev.type !== cur.type}
           >
             {({ getFieldValue }) => {
               const type = getFieldValue('type');
               if (type === 'http' || type === 'https') {
                 return (
-                  <Form.Item
-                    label="绑定的自定义域名 (custom_domains，英文逗号分隔)"
-                    name="customDomains"
-                    rules={[{ required: true, message: '穿透 Web 必须指定域名' }]}
-                  >
-                    <Input placeholder="app.example.com" />
-                  </Form.Item>
+                  <>
+                    <Form.Item
+                      label="自定义域名 customDomains (逗号分隔)"
+                      name="customDomains"
+                      tooltip="HTTP/HTTPS 至少指定 customDomains 或 subdomain 其一"
+                    >
+                      <Input placeholder="app.example.com" />
+                    </Form.Item>
+                    <Form.Item label="子域名 subdomain" name="subdomain">
+                      <Input placeholder="myapp" />
+                    </Form.Item>
+                    {type === 'http' && (
+                      <>
+                        <Form.Item label="路径前缀 locations (逗号分隔)" name="locations">
+                          <Input placeholder="/api,/static" />
+                        </Form.Item>
+                        <Form.Item label="HostHeaderRewrite" name="hostHeaderRewrite">
+                          <Input placeholder="internal.example.com" />
+                        </Form.Item>
+                        <Form.Item label="HTTP 用户名" name="httpUser">
+                          <Input placeholder="为 Basic Auth 添加用户名" />
+                        </Form.Item>
+                        <Form.Item label="HTTP 密码" name="httpPassword">
+                          <Input.Password placeholder="为 Basic Auth 添加密码" />
+                        </Form.Item>
+                      </>
+                    )}
+                  </>
                 );
               }
+              if (type === 'tcpmux') {
+                return (
+                  <>
+                    <Form.Item label="复用器 multiplexer" name="multiplexer" initialValue="httpconnect">
+                      <Select options={[{ value: 'httpconnect', label: 'httpconnect (默认)' }]} />
+                    </Form.Item>
+                    <Form.Item label="自定义域名 customDomains (逗号分隔)" name="customDomains" rules={[{ required: true }]}>
+                      <Input placeholder="proxy.example.com" />
+                    </Form.Item>
+                    <Form.Item label="路由 HTTP 用户名 routeByHTTPUser" name="routeByHTTPUser">
+                      <Input placeholder="可选：按 Basic 用户名路由" />
+                    </Form.Item>
+                  </>
+                );
+              }
+              if (type === 'stcp' || type === 'sudp' || type === 'xtcp') {
+                return (
+                  <>
+                    <Form.Item label="共享密钥 secretKey" name="secretKey" rules={[{ required: true, message: '安全代理必须设置 secretKey' }]}>
+                      <Input.Password placeholder="访客端与服务端共享密钥" />
+                    </Form.Item>
+                    <Form.Item label="允许访问的用户 allowUsers (逗号分隔，可选)" name="allowUsers">
+                      <Input placeholder="alice,bob 或 *" />
+                    </Form.Item>
+                  </>
+                );
+              }
+              // tcp / udp
               return (
                 <Form.Item
-                  label="公网暴露端口"
+                  label="公网暴露端口 remotePort"
                   name="remotePort"
                   rules={[{ required: true, message: '请输入公网暴露端口' }]}
                 >
                   <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="6000" />
                 </Form.Item>
+              );
+            }}
+          </Form.Item>
+
+          {/* 插件透传（高级） */}
+          <Form.Item
+            label="高级：使用本地插件代替 local 端口"
+            name="pluginName"
+            tooltip="选择后将由 frpc 内置插件提供后端服务，可不填本地 IP/端口"
+          >
+            <Select
+              allowClear
+              placeholder="可选：选择插件以替代 local 端口"
+              options={[
+                { value: 'http_proxy', label: 'http_proxy — HTTP 代理' },
+                { value: 'socks5', label: 'socks5 — SOCKS5 代理' },
+                { value: 'static_file', label: 'static_file — 静态文件服务' },
+                { value: 'unix_domain_socket', label: 'unix_domain_socket' },
+                { value: 'http2http', label: 'http2http' },
+                { value: 'http2https', label: 'http2https' },
+                { value: 'https2http', label: 'https2http' },
+                { value: 'https2https', label: 'https2https' },
+                { value: 'tls2raw', label: 'tls2raw' },
+              ]}
+            />
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) => prev.pluginName !== cur.pluginName}
+          >
+            {({ getFieldValue }) => {
+              const p = getFieldValue('pluginName');
+              if (!p) return null;
+              const needsLocalAddr = ['http2http', 'http2https', 'https2http', 'https2https', 'tls2raw'].includes(p);
+              const needsLocalPath = p === 'static_file' || p === 'unix_domain_socket';
+              const needsAuth = p === 'http_proxy' || p === 'socks5' || p === 'static_file';
+              return (
+                <>
+                  {needsLocalAddr && (
+                    <Form.Item label="插件 localAddr" name="pluginLocalAddr" rules={[{ required: true }]}>
+                      <Input placeholder="127.0.0.1:8080" />
+                    </Form.Item>
+                  )}
+                  {needsLocalPath && (
+                    <Form.Item label={p === 'static_file' ? '静态目录 localPath' : 'Socket 路径 localPath'} name="pluginLocalPath" rules={[{ required: true }]}>
+                      <Input placeholder={p === 'static_file' ? '/var/www' : '/var/run/app.sock'} />
+                    </Form.Item>
+                  )}
+                  {needsAuth && (
+                    <>
+                      <Form.Item label="插件用户名" name="pluginHTTPUser">
+                        <Input placeholder="可选" />
+                      </Form.Item>
+                      <Form.Item label="插件密码" name="pluginHTTPPassword">
+                        <Input.Password placeholder="可选" />
+                      </Form.Item>
+                    </>
+                  )}
+                </>
               );
             }}
           </Form.Item>

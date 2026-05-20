@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# OpenAPI generated client (regenerate via `npm run gen:api`)
+src/api/schema.d.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

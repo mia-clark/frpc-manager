@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen:api": "openapi-typescript ../internal/api/openapi.yaml -o src/api/schema.d.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.2.3",
+    "@tanstack/react-query": "^5.100.11",
     "antd": "^6.4.3",
     "axios": "^1.16.1",
     "react": "^19.2.6",

@@ -1,314 +1,471 @@
-import { useEffect, useState, useRef } from 'react';
-import { Card, Row, Col, Progress, Statistic, List, Space, Typography, Empty, Skeleton } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Card,
+  Row,
+  Col,
+  Progress,
+  Statistic,
+  Space,
+  Typography,
+  Empty,
+  Skeleton,
+  List,
+  Tag,
+  Avatar,
+  theme as antdTheme,
+} from 'antd';
 import {
   DesktopOutlined,
   CloudServerOutlined,
   FieldTimeOutlined,
   DeploymentUnitOutlined,
+  ThunderboltOutlined,
+  AlertOutlined,
+  ClusterOutlined,
 } from '@ant-design/icons';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { Link } from 'react-router-dom';
 import client from '../api/client';
+import { useEventStream, useEventSubscription } from '../events/EventStreamContext';
+import type { BusEvent, EventType } from '../events/types';
 
 const { Title, Text } = Typography;
 
-interface HistoryPoint {
-  time: string;
+interface ConfigItem {
+  id: string;
+  name?: string;
+  serverAddr?: string;
+  serverPort?: number;
+  state?: string;
+}
+
+interface SparkPoint {
+  t: number;
   cpu: number;
-  memory: number;
+  mem: number;
+}
+
+const TYPE_BADGE: Record<EventType, { color: string; label: string }> = {
+  'instance.state': { color: 'geekblue', label: '实例状态' },
+  'instance.error': { color: 'red', label: '实例错误' },
+  'proxy.status': { color: 'cyan', label: '隧道状态' },
+  'proxy.connections': { color: 'purple', label: '隧道连接' },
+  'config.changed': { color: 'gold', label: '配置变更' },
+  'config.deleted': { color: 'volcano', label: '配置删除' },
+  'log.line': { color: 'default', label: '日志' },
+};
+
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function fmtUptime(seconds?: number): string {
+  if (!seconds || seconds < 0) return '—';
+  const d = Math.floor(seconds / 86_400);
+  const h = Math.floor((seconds % 86_400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const parts: string[] = [];
+  if (d > 0) parts.push(`${d}天`);
+  if (h > 0) parts.push(`${h}时`);
+  parts.push(`${m}分`);
+  return parts.join(' ');
+}
+
+function eventSummary(e: BusEvent): string {
+  const d = e.data as Record<string, unknown> | undefined;
+  if (!d) return '';
+  switch (e.type) {
+    case 'instance.state':
+      return `${d.prev_state ? d.prev_state + ' → ' : ''}${d.state}`;
+    case 'instance.error':
+      return String(d.message ?? '');
+    case 'proxy.status':
+      return `[${d.type}] ${d.name} → ${d.status}`;
+    case 'proxy.connections':
+      return `[${d.type}] ${d.name} 连接数=${d.cur_conns}`;
+    case 'log.line':
+      return String(d.line ?? '');
+    default:
+      return JSON.stringify(d);
+  }
 }
 
 const Dashboard: React.FC = () => {
-  const [loading, setLoading] = useState<boolean>(true);
-  const [sysInfo, setSysInfo] = useState<any>(null);
-  const [history, setHistory] = useState<HistoryPoint[]>([]);
-  const prevNetBytes = useRef<Record<string, number>>({});
-  const [netSpeed, setNetSpeed] = useState<{ rxSpeed: number; txSpeed: number }>({ rxSpeed: 0, txSpeed: 0 });
+  const { token } = antdTheme.useToken();
+  const { state: connState, lastSeq } = useEventStream();
 
-  // 轮询定时器
-  useEffect(() => {
-    fetchSystemInfo(true);
-    const timer = setInterval(() => {
-      fetchSystemInfo(false);
-    }, 2500);
-    return () => clearInterval(timer);
-  }, []);
+  const [loading, setLoading] = useState(true);
+  const [sysInfo, setSysInfo] = useState<Record<string, any> | null>(null);
+  const [history, setHistory] = useState<SparkPoint[]>([]);
+  const [configs, setConfigs] = useState<ConfigItem[]>([]);
+  const [recentEvents, setRecentEvents] = useState<BusEvent[]>([]);
+  const prevNet = useRef<{ ts: number; rx: number; tx: number } | null>(null);
+  const [netSpeed, setNetSpeed] = useState({ rx: 0, tx: 0 });
 
-  const formatUptime = (seconds: number) => {
-    if (!seconds) return '0秒';
-    const d = Math.floor(seconds / (3600 * 24));
-    const h = Math.floor((seconds % (3600 * 24)) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${d > 0 ? d + '天 ' : ''}${h > 0 ? h + '小时 ' : ''}${m > 0 ? m + '分 ' : ''}${s}秒`;
-  };
+  useEventSubscription(null, (e) => {
+    setRecentEvents((prev) => {
+      const next = prev.length >= 20 ? prev.slice(prev.length - 19) : prev.slice();
+      next.push(e);
+      return next;
+    });
+    if (e.type === 'instance.state' || e.type === 'config.changed' || e.type === 'config.deleted') {
+      // 实例列表可能改变，刷新一次
+      void fetchConfigs();
+    }
+  });
 
-  const fetchSystemInfo = async (isFirst: boolean) => {
+  const fetchConfigs = async () => {
     try {
-      const resp = await client.get('/api/v1/system/info');
+      const resp = await client.get('/api/v1/configs');
       if (resp.status === 200) {
-        const data = resp.data;
-        setSysInfo(data);
-
-        // 计算网卡实时速率 (对所有网卡 RX/TX 累加求差值)
-        let totalRx = 0;
-        let totalTx = 0;
-        if (data.network && Array.isArray(data.network)) {
-          data.network.forEach((nic: any) => {
-            if (nic.rx_bytes) totalRx += nic.rx_bytes;
-            if (nic.tx_bytes) totalTx += nic.tx_bytes;
-          });
-        } else if (data.network && typeof data.network === 'object') {
-          // 部分系统返回的是对象结构
-          Object.values(data.network).forEach((nic: any) => {
-            if (nic.rx_bytes) totalRx += nic.rx_bytes;
-            if (nic.tx_bytes) totalTx += nic.tx_bytes;
-          });
-        }
-
-        const nowMs = Date.now();
-        if (prevNetBytes.current.time) {
-          const deltaSec = (nowMs - prevNetBytes.current.time) / 1000;
-          if (deltaSec > 0) {
-            const rxSpeed = Math.max(0, (totalRx - (prevNetBytes.current.rx || 0)) / deltaSec);
-            const txSpeed = Math.max(0, (totalTx - (prevNetBytes.current.tx || 0)) / deltaSec);
-            setNetSpeed({ rxSpeed, txSpeed });
-          }
-        }
-        prevNetBytes.current = { rx: totalRx, tx: totalTx, time: nowMs };
-
-        // 收集 CPU 与内存历史
-        const processCpu = data.process?.cpu_percent || 0;
-        const memoryUsedPercent = data.memory?.used_percent || 0;
-        const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-        setHistory((prev) => {
-          const updated = [...prev, { time: nowStr, cpu: Math.min(100, Math.max(0, processCpu)), memory: memoryUsedPercent }];
-          // 保持最近 12 个采样点
-          if (updated.length > 12) {
-            updated.shift();
-          }
-          return updated;
-        });
-
-        if (isFirst) setLoading(false);
+        const items = (resp.data?.items ?? resp.data ?? []) as ConfigItem[];
+        setConfigs(items);
       }
-    } catch (err) {
-      console.error('Failed to fetch system info:', err);
+    } catch {
+      // 静默
     }
   };
 
-  const formatBytes = (bytes: number, decimals = 2) => {
-    if (!bytes || bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-  };
+  useEffect(() => {
+    fetchConfigs();
+    let stopped = false;
+    const pump = async () => {
+      try {
+        const resp = await client.get('/api/v1/system/info');
+        if (stopped) return;
+        const data = resp.data ?? {};
+        setSysInfo(data);
+
+        const network = Array.isArray(data.network) ? data.network : [];
+        const rxSum = network.reduce((acc: number, n: any) => acc + (n.bytes_recv ?? 0), 0);
+        const txSum = network.reduce((acc: number, n: any) => acc + (n.bytes_sent ?? 0), 0);
+        const now = Date.now();
+        if (prevNet.current) {
+          const dt = (now - prevNet.current.ts) / 1000;
+          if (dt > 0) {
+            setNetSpeed({
+              rx: Math.max(0, (rxSum - prevNet.current.rx) / dt),
+              tx: Math.max(0, (txSum - prevNet.current.tx) / dt),
+            });
+          }
+        }
+        prevNet.current = { ts: now, rx: rxSum, tx: txSum };
+
+        setHistory((prev) => {
+          const next = prev.length >= 30 ? prev.slice(prev.length - 29) : prev.slice();
+          next.push({
+            t: now,
+            cpu: data.cpu?.usage_percent ?? 0,
+            mem: data.memory?.used_percent ?? 0,
+          });
+          return next;
+        });
+      } finally {
+        if (!stopped) setLoading(false);
+      }
+    };
+    pump();
+    const timer = window.setInterval(pump, 2500);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const cpuPercent = Math.round(sysInfo?.cpu?.usage_percent ?? 0);
+  const memPercent = Math.round(sysInfo?.memory?.used_percent ?? 0);
+  const disks = (sysInfo?.disk ?? []) as Array<{
+    path: string;
+    fstype?: string;
+    used: number;
+    total: number;
+    used_percent: number;
+  }>;
+  const mainDisk = disks[0] || { path: '/', used: 0, total: 0, used_percent: 0 };
+  const diskPercent = Math.round(mainDisk.used_percent ?? 0);
+
+  const runningCount = configs.filter((c) => c.state === 'started').length;
+  const errorCount = configs.filter((c) => c.state === 'error').length;
+
+  const recentReversed = useMemo(() => recentEvents.slice().reverse(), [recentEvents]);
 
   if (loading) {
     return (
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
-        <Skeleton active paragraph={{ rows: 4 }} />
+        <Skeleton active paragraph={{ rows: 3 }} />
         <Row gutter={[16, 16]}>
-          <Col span={8}><Skeleton active avatar /></Col>
-          <Col span={8}><Skeleton active avatar /></Col>
-          <Col span={8}><Skeleton active avatar /></Col>
+          {[0, 1, 2].map((i) => (
+            <Col key={i} xs={24} md={8}>
+              <Card>
+                <Skeleton active avatar paragraph={{ rows: 3 }} />
+              </Card>
+            </Col>
+          ))}
         </Row>
       </Space>
     );
   }
 
-  // 整理内存和磁盘的值
-  const memUsed = sysInfo?.memory?.used || 0;
-  const memTotal = sysInfo?.memory?.total || 1;
-  const memPercent = Math.round(sysInfo?.memory?.used_percent || 0);
-
-  // 取主盘分区 (通常是列表中第一个)
-  const disks = sysInfo?.disk || [];
-  const mainDisk = disks[0] || { path: '/', used: 0, total: 1, used_percent: 0 };
-  const diskPercent = Math.round(mainDisk.used_percent || 0);
-
-  // CPU 使用率
-  const cpuPercent = Math.round(sysInfo?.cpu?.total_percent || 0);
-
   return (
-    <div style={{ padding: '4px' }}>
-      <Title level={3} style={{ color: '#fff', marginBottom: '24px' }}>系统监控大盘</Title>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
+        <Space align="center" style={{ justifyContent: 'space-between', width: '100%' }} wrap>
+          <Space direction="vertical" size={2}>
+            <Title level={4} style={{ margin: 0 }}>
+              仪表盘
+            </Title>
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              一眼掌握 frpc 实例、宿主机资源与事件流的实时状态。
+            </Text>
+          </Space>
+          <Space size="middle" wrap>
+            <Tag color={connState === 'open' ? 'success' : connState === 'connecting' ? 'warning' : 'error'}>
+              {connState === 'open' ? '事件流接通' : connState === 'connecting' ? '连接中…' : '事件流断开'}
+            </Tag>
+            {lastSeq > 0 && <Tag bordered={false}>seq #{lastSeq}</Tag>}
+          </Space>
+        </Space>
+      </Card>
 
-      {/* 快捷指标行 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
+      <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} md={6}>
-          <Card className="glass-card" bordered={false} bodyStyle={{ padding: '20px' }}>
+          <Card styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
             <Statistic
-              title={<span style={{ color: 'rgba(255,255,255,0.45)' }}>主机名称</span>}
-              value={sysInfo?.host?.hostname || 'Unknown'}
-              valueStyle={{ color: '#fff', fontSize: '18px', fontWeight: 600 }}
-              prefix={<DesktopOutlined style={{ color: '#1677ff', marginRight: '8px' }} />}
+              title="实例总览"
+              value={configs.length}
+              prefix={<ClusterOutlined style={{ color: token.colorPrimary, marginRight: 6 }} />}
+              suffix="个"
+              valueStyle={{ fontSize: 22 }}
             />
-            <Text type="secondary" style={{ fontSize: '12px' }}>
-              OS: {sysInfo?.host?.os || 'Linux'} / {sysInfo?.host?.kernel_version || ''}
+            <Space size="small" wrap style={{ marginTop: 8 }}>
+              <Tag color="success">运行 {runningCount}</Tag>
+              <Tag color="default">停止 {Math.max(0, configs.length - runningCount - errorCount)}</Tag>
+              {errorCount > 0 && <Tag color="error">异常 {errorCount}</Tag>}
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <Card styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
+            <Statistic
+              title="主机名"
+              value={sysInfo?.host?.hostname || '—'}
+              prefix={<DesktopOutlined style={{ color: token.colorSuccess, marginRight: 6 }} />}
+              valueStyle={{ fontSize: 18 }}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {sysInfo?.host?.platform} {sysInfo?.host?.platform_version}
             </Text>
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card className="glass-card" bordered={false} bodyStyle={{ padding: '20px' }}>
+          <Card styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
             <Statistic
-              title={<span style={{ color: 'rgba(255,255,255,0.45)' }}>运行时间</span>}
-              value={formatUptime(sysInfo?.uptime_s)}
-              valueStyle={{ color: '#fff', fontSize: '18px', fontWeight: 600 }}
-              prefix={<FieldTimeOutlined style={{ color: '#52c41a', marginRight: '8px' }} />}
+              title="守护进程已运行"
+              value={fmtUptime(sysInfo?.uptime_s)}
+              prefix={<FieldTimeOutlined style={{ color: token.colorWarning, marginRight: 6 }} />}
+              valueStyle={{ fontSize: 18 }}
             />
-            <Text type="secondary" style={{ fontSize: '12px' }}>
-              守护进程启动运行时间
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              主机已开机 {fmtUptime(sysInfo?.host?.uptime_seconds)}
             </Text>
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card className="glass-card" bordered={false} bodyStyle={{ padding: '20px' }}>
+          <Card styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
             <Statistic
-              title={<span style={{ color: 'rgba(255,255,255,0.45)' }}>网络吞吐</span>}
-              value={formatBytes(netSpeed.rxSpeed) + '/s'}
-              valueStyle={{ color: '#fff', fontSize: '18px', fontWeight: 600 }}
-              prefix={<CloudServerOutlined style={{ color: '#faad14', marginRight: '8px' }} />}
+              title="网络吞吐 ↓"
+              value={`${fmtBytes(netSpeed.rx)}/s`}
+              prefix={<CloudServerOutlined style={{ color: token.colorInfo, marginRight: 6 }} />}
+              valueStyle={{ fontSize: 18 }}
             />
-            <Text type="secondary" style={{ fontSize: '12px' }}>
-              发送: {formatBytes(netSpeed.txSpeed)}/s
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card className="glass-card" bordered={false} bodyStyle={{ padding: '20px' }}>
-            <Statistic
-              title={<span style={{ color: 'rgba(255,255,255,0.45)' }}>网络连接数</span>}
-              value={sysInfo?.connections?.total || 0}
-              valueStyle={{ color: '#fff', fontSize: '18px', fontWeight: 600 }}
-              prefix={<DeploymentUnitOutlined style={{ color: '#eb2f96', marginRight: '8px' }} />}
-            />
-            <Text type="secondary" style={{ fontSize: '12px' }}>
-              守护进程占用: {sysInfo?.connections?.process || 0} 个连接
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              发送 ↑ {fmtBytes(netSpeed.tx)}/s
             </Text>
           </Card>
         </Col>
       </Row>
 
-      {/* 资源环形卡片行 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
+      <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
-          <Card className="glass-card" title={<span style={{ color: '#fff' }}>CPU 使用率</span>} bordered={false} style={{ textAlign: 'center' }}>
+          <Card title={<Space><ThunderboltOutlined /> CPU 使用率</Space>} styles={{ body: { padding: 18, textAlign: 'center' } }} style={{ borderRadius: 10 }}>
             <Progress
               type="dashboard"
               percent={cpuPercent}
-              strokeColor={{
-                '0%': '#108ee9',
-                '100%': '#87d068',
-              }}
-              trailColor="rgba(255,255,255,0.05)"
-              format={(percent) => <span style={{ color: '#fff', fontSize: '24px' }}>{percent}%</span>}
+              strokeColor={{ '0%': token.colorPrimary, '100%': token.colorSuccess }}
+              format={(p) => <Text strong style={{ fontSize: 22 }}>{p}%</Text>}
             />
-            <div style={{ marginTop: '8px' }}>
-              <Text type="secondary">{sysInfo?.cpu?.model_name || '处理器核心'}</Text>
-              <div><Text type="secondary">线程数: {sysInfo?.cpu?.cores || 1} Cores</Text></div>
-            </div>
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              {sysInfo?.cpu?.logical_count ?? '?'} 核 · 物理 {sysInfo?.cpu?.physical_count ?? '?'}
+            </Text>
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card className="glass-card" title={<span style={{ color: '#fff' }}>内存 使用率</span>} bordered={false} style={{ textAlign: 'center' }}>
+          <Card title="内存 使用率" styles={{ body: { padding: 18, textAlign: 'center' } }} style={{ borderRadius: 10 }}>
             <Progress
               type="dashboard"
               percent={memPercent}
-              strokeColor={{
-                '0%': '#1677ff',
-                '100%': '#fa8c16',
-              }}
-              trailColor="rgba(255,255,255,0.05)"
-              format={(percent) => <span style={{ color: '#fff', fontSize: '24px' }}>{percent}%</span>}
+              strokeColor={{ '0%': token.colorSuccess, '100%': token.colorWarning }}
+              format={(p) => <Text strong style={{ fontSize: 22 }}>{p}%</Text>}
             />
-            <div style={{ marginTop: '8px' }}>
-              <Text type="secondary">已使用: {formatBytes(memUsed)} / {formatBytes(memTotal)}</Text>
-              <div><Text type="secondary">Swap已用: {formatBytes(sysInfo?.memory?.swap_used || 0)}</Text></div>
-            </div>
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              {fmtBytes(sysInfo?.memory?.used)} / {fmtBytes(sysInfo?.memory?.total)}
+            </Text>
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card className="glass-card" title={<span style={{ color: '#fff' }}>磁盘 存储占用</span>} bordered={false} style={{ textAlign: 'center' }}>
+          <Card title="磁盘 (主分区)" styles={{ body: { padding: 18, textAlign: 'center' } }} style={{ borderRadius: 10 }}>
             <Progress
               type="dashboard"
               percent={diskPercent}
-              strokeColor={{
-                '0%': '#faad14',
-                '100%': '#ff4d4f',
-              }}
-              trailColor="rgba(255,255,255,0.05)"
-              format={(percent) => <span style={{ color: '#fff', fontSize: '24px' }}>{percent}%</span>}
+              strokeColor={{ '0%': token.colorWarning, '100%': token.colorError }}
+              format={(p) => <Text strong style={{ fontSize: 22 }}>{p}%</Text>}
             />
-            <div style={{ marginTop: '8px' }}>
-              <Text type="secondary">分区: {mainDisk.path} ({mainDisk.fstype || 'ext4'})</Text>
-              <div><Text type="secondary">已使用: {formatBytes(mainDisk.used)} / {formatBytes(mainDisk.total)}</Text></div>
-            </div>
+            <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              {mainDisk.path} · {fmtBytes(mainDisk.used)} / {fmtBytes(mainDisk.total)}
+            </Text>
           </Card>
         </Col>
       </Row>
 
-      {/* 实时折线图与进程详细 */}
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={16}>
-          <Card className="glass-card" title={<span style={{ color: '#fff' }}>守护进程性能波动 (CPU / 内存使用)</span>} bordered={false}>
+          <Card title="性能趋势 (近 30 个采样)" styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
             {history.length > 0 ? (
-              <div style={{ width: '100%', height: 260 }}>
+              <div style={{ width: '100%', height: 240 }}>
                 <ResponsiveContainer>
-                  <AreaChart data={history} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <AreaChart data={history} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
                     <defs>
-                      <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#1677ff" stopOpacity={0.4}/>
-                        <stop offset="95%" stopColor="#1677ff" stopOpacity={0}/>
+                      <linearGradient id="dashCpu" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={token.colorPrimary} stopOpacity={0.5} />
+                        <stop offset="95%" stopColor={token.colorPrimary} stopOpacity={0} />
                       </linearGradient>
-                      <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#52c41a" stopOpacity={0.4}/>
-                        <stop offset="95%" stopColor="#52c41a" stopOpacity={0}/>
+                      <linearGradient id="dashMem" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={token.colorSuccess} stopOpacity={0.5} />
+                        <stop offset="95%" stopColor={token.colorSuccess} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <XAxis dataKey="time" stroke="rgba(255,255,255,0.3)" fontSize={11} />
-                    <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={[0, 'auto']} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={token.colorBorderSecondary} />
+                    <XAxis dataKey="t" tickFormatter={(t) => new Date(t).toLocaleTimeString().slice(0, 5)} stroke={token.colorTextSecondary} fontSize={11} />
+                    <YAxis domain={[0, 100]} stroke={token.colorTextSecondary} fontSize={11} />
                     <Tooltip
-                      contentStyle={{ background: '#14171a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
-                      labelStyle={{ color: '#fff' }}
+                      contentStyle={{ background: token.colorBgElevated, border: 'none', borderRadius: 8 }}
+                      labelFormatter={(t) => new Date(Number(t)).toLocaleTimeString()}
+                      formatter={(v, name) => [`${Number(v ?? 0).toFixed(1)}%`, name === 'cpu' ? 'CPU' : '内存']}
                     />
-                    <Area type="monotone" name="进程 CPU %" dataKey="cpu" stroke="#1677ff" strokeWidth={2} fillOpacity={1} fill="url(#colorCpu)" />
-                    <Area type="monotone" name="系统 内存 %" dataKey="memory" stroke="#52c41a" strokeWidth={2} fillOpacity={1} fill="url(#colorMem)" />
+                    <Area type="monotone" dataKey="cpu" stroke={token.colorPrimary} fill="url(#dashCpu)" />
+                    <Area type="monotone" dataKey="mem" stroke={token.colorSuccess} fill="url(#dashMem)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
             ) : (
-              <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Empty description={<span style={{ color: 'rgba(255,255,255,0.45)' }}>收集性能指标数据中...</span>} />
-              </div>
+              <Empty description="收集采样中…" />
             )}
           </Card>
         </Col>
+
         <Col xs={24} lg={8}>
-          <Card className="glass-card" title={<span style={{ color: '#fff' }}>守护进程自省 (Introspection)</span>} bordered={false}>
+          <Card
+            title={<Space><AlertOutlined /> 实时事件</Space>}
+            styles={{ body: { padding: 0 } }}
+            style={{ borderRadius: 10 }}
+            extra={<Link to="/events">查看全部</Link>}
+          >
             <List
-              split={false}
-              dataSource={[
-                { label: '进程内存 (RSS)', value: formatBytes(sysInfo?.process?.rss || 0) },
-                { label: 'Go 协程数量 (Goroutines)', value: sysInfo?.process?.num_goroutines || 0 },
-                { label: '物理线程数 (Threads)', value: sysInfo?.process?.num_threads || 0 },
-                { label: '句柄描述符数 (Open Files)', value: sysInfo?.process?.num_fds || 0 },
-                { label: '进程启动时间', value: new Date(sysInfo?.process?.started_at).toLocaleString() },
-                { label: '程序工作目录', value: sysInfo?.data_dir || '/data' },
-              ]}
-              renderItem={(item) => (
-                <List.Item style={{ padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.45)' }}>{item.label}</Text>
-                  <Text strong style={{ color: '#fff' }}>{item.value}</Text>
+              size="small"
+              locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待事件…" /> }}
+              dataSource={recentReversed}
+              style={{ maxHeight: 260, overflowY: 'auto' }}
+              renderItem={(e) => (
+                <List.Item style={{ padding: '8px 14px' }}>
+                  <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                    <Space size={6}>
+                      <Tag bordered={false} color={TYPE_BADGE[e.type]?.color}>
+                        {TYPE_BADGE[e.type]?.label ?? e.type}
+                      </Tag>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {new Date(e.ts).toLocaleTimeString()}
+                      </Text>
+                    </Space>
+                    <Text style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace' }} ellipsis>
+                      {eventSummary(e)}
+                    </Text>
+                  </Space>
                 </List.Item>
               )}
             />
           </Card>
         </Col>
       </Row>
-    </div>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24}>
+          <Card
+            title={<Space><DeploymentUnitOutlined /> FRP 实例</Space>}
+            styles={{ body: { padding: 18 } }}
+            style={{ borderRadius: 10 }}
+            extra={<Link to="/configs">管理实例</Link>}
+          >
+            {configs.length === 0 ? (
+              <Empty description="还没有配置任何 frpc 实例" />
+            ) : (
+              <Row gutter={[12, 12]}>
+                {configs.map((c) => (
+                  <Col key={c.id} xs={24} sm={12} md={8} lg={6}>
+                    <Card size="small" hoverable styles={{ body: { padding: 14 } }} style={{ borderRadius: 8 }}>
+                      <Space align="start" size="middle" style={{ width: '100%' }}>
+                        <Avatar
+                          shape="square"
+                          icon={<ClusterOutlined />}
+                          style={{
+                            background:
+                              c.state === 'started'
+                                ? token.colorSuccess
+                                : c.state === 'error'
+                                ? token.colorError
+                                : token.colorFillSecondary,
+                          }}
+                        />
+                        <Space direction="vertical" size={2} style={{ flex: 1, minWidth: 0 }}>
+                          <Text strong ellipsis style={{ maxWidth: 200 }}>
+                            {c.name || c.id.slice(0, 8)}
+                          </Text>
+                          <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+                            {c.serverAddr ? `${c.serverAddr}:${c.serverPort ?? '?'}` : '—'}
+                          </Text>
+                          <Tag
+                            bordered={false}
+                            color={
+                              c.state === 'started'
+                                ? 'success'
+                                : c.state === 'error'
+                                ? 'error'
+                                : c.state === 'starting' || c.state === 'stopping'
+                                ? 'processing'
+                                : 'default'
+                            }
+                            style={{ marginTop: 4 }}
+                          >
+                            {c.state || 'stopped'}
+                          </Tag>
+                        </Space>
+                      </Space>
+                    </Card>
+                  </Col>
+                ))}
+              </Row>
+            )}
+          </Card>
+        </Col>
+      </Row>
+    </Space>
   );
 };
 
