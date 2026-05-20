@@ -15,14 +15,35 @@ Headless FRP client manager — manages multiple `frpc` instances inside a singl
 
 The intended client is your own React/Vue webui — the API is built to be browser-friendly.
 
-## Quick start
+## Install
+
+### Option A — pre-built Docker image (recommended)
+
+```bash
+docker pull ghcr.io/mia-clark/frp-manager-server:latest
+docker run -d --name frpmgrd --network host \
+  -e FRPMGR_API_TOKEN="$(openssl rand -hex 32)" \
+  -v $(pwd)/data:/data \
+  ghcr.io/mia-clark/frp-manager-server:latest
+```
+
+Images are published on every push to `main` (tag `latest`, `main`, `main-<sha>`) and on every release tag (`vX.Y.Z`, `vX.Y`, `vX`).
+
+### Option B — pre-built CLI binary
+
+Download from [releases](https://github.com/mia-clark/frp-manager-server/releases) — Linux (amd64/arm64/armv7), macOS (amd64/arm64), Windows (amd64/arm64).
+
+```bash
+# Linux amd64 example
+curl -L https://github.com/mia-clark/frp-manager-server/releases/latest/download/frpmgrd_*_linux_amd64.tar.gz | tar -xz
+FRPMGR_API_TOKEN=$(openssl rand -hex 32) ./frpmgrd serve
+```
+
+### Option C — docker compose (build locally)
 
 ```bash
 cd deploy/
-cp .env.example .env
-# Generate a strong token and paste it into .env
-openssl rand -hex 32
-
+cp .env.example .env       # paste a real token
 docker compose up -d --build
 curl http://localhost:8080/api/v1/health
 ```
@@ -69,6 +90,31 @@ make docker         # docker build using deploy/Dockerfile
 | M5 | Docker packaging + docs | done |
 | M6 | System/container metrics (`/api/v1/system/*`) + per-proxy connection count | done |
 | M7 | Embedded Scalar API docs at `/api/docs/` | done |
+| M8 | CI: Docker (multi-arch → ghcr.io) + Release (goreleaser, 7 platform binaries) | done |
+
+## Releasing
+
+Tag a commit on `main` to trigger the full release pipeline:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This fires two parallel workflows:
+
+1. **`Docker`** — builds and pushes `ghcr.io/mia-clark/frp-manager-server:0.1.0` plus `0.1`, `0`, and updates `latest` (multi-arch: amd64 + arm64).
+2. **`Release`** — cross-compiles 7 binaries via `goreleaser`, generates `checksums.txt`, drafts a GitHub Release with auto-generated changelog.
+
+For a snapshot build without tagging: `Actions → Release → Run workflow` with empty tag input — produces a downloadable artifact for testing.
+
+### First-time GitHub setup
+
+Both workflows need:
+- **Settings → Actions → General → Workflow permissions** → set to **Read and write**
+- **Settings → Packages → Manage Actions access** → ensure repo has write access (auto-granted by `GITHUB_TOKEN` permissions in the workflow)
+
+The first `ghcr.io` push makes the package; afterwards visit https://github.com/users/mia-clark/packages and set visibility to public if desired.
 
 ## License
 

@@ -1,0 +1,96 @@
+version: 2
+
+project_name: frpmgrd
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: frpmgrd
+    main: ./cmd/frpmgrd
+    binary: frpmgrd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mia-clark/frp-manager-server/pkg/version.Number={{.Version}}
+      - -X github.com/mia-clark/frp-manager-server/pkg/version.BuildDate={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      # macOS does not ship arm32 builds in our matrix
+      - goos: darwin
+        goarch: arm
+      # Windows on arm/v7 is not a real target for frpc
+      - goos: windows
+        goarch: arm
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - docs/README-server.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: "Features"
+      regexp: '^.*?feat(\(.+\))??:.+$'
+      order: 0
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\(.+\))??:.+$'
+      order: 1
+    - title: "Other"
+      order: 999
+
+release:
+  draft: false
+  prerelease: auto
+  mode: replace
+  github:
+    owner: mia-clark
+    name: frp-manager-server
+  header: |
+    ## frpmgrd {{ .Tag }}
+
+    Built from [`{{ .ShortCommit }}`](https://github.com/mia-clark/frp-manager-server/commit/{{ .FullCommit }}).
+  footer: |
+    ---
+
+    Container image: `ghcr.io/mia-clark/frp-manager-server:{{ .Version }}`
+    See [`docs/README-server.md`](https://github.com/mia-clark/frp-manager-server/blob/main/docs/README-server.md) for deployment.
