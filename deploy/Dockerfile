@@ -6,6 +6,14 @@ RUN apk add --no-cache git ca-certificates tzdata
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+
+# WebUI 通过 //go:embed dist 嵌入 Go 二进制 —— 必须确保 web/dist/index.html
+# 在构建上下文里存在。本 Dockerfile 故意不跑 npm build，由调用方（make /
+# 开发者）提前生成 web/dist。漏跑时这里 fail-fast，而不是出空白 WebUI。
+RUN test -f web/dist/index.html || ( \
+      echo "ERROR: web/dist/index.html 不存在 —— 请先在仓库根目录跑 'make web' 或 'cd web && npm run build'，再 docker build" >&2; \
+      exit 1 )
+
 ARG VERSION=dev
 ARG BUILD_DATE=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build \

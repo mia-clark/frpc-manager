@@ -5,12 +5,24 @@ LDFLAGS := -s -w \
     -X github.com/mia-clark/frp-manager-server/pkg/version.Number=$(VERSION) \
     -X github.com/mia-clark/frp-manager-server/pkg/version.BuildDate=$(BUILD_DATE)
 
-.PHONY: build test vet tidy clean docker run
+.PHONY: build build-host web web-install test vet tidy clean docker run
 
-build:
+# 前端依赖 — 仅在 node_modules 缺失时跑一次完整 install
+web-install:
+	test -d web/node_modules || (cd web && npm ci)
+
+# 构建前端 dist —— 嵌入到 Go 二进制需要的产物
+# 必须在 build / docker 之前执行；否则 //go:embed dist 会失败或得到空 FS
+web: web-install
+	cd web && npm run build
+
+# Go 跨平台 (Linux/amd64) 构建 daemon —— 镜像里用这个
+# 自动先 build web，确保 dist 是最新的
+build: web
 	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "$(LDFLAGS)" -o bin/frpmgrd ./cmd/frpmgrd
 
-build-host:
+# 本机平台构建（Windows/Mac/Linux 通用），用于本地开发跑 daemon
+build-host: web
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/frpmgrd ./cmd/frpmgrd
 
 test:
@@ -23,10 +35,16 @@ tidy:
 	go mod tidy
 
 clean:
-	rm -rf bin/
+	rm -rf bin/ web/dist/
 
-docker:
-	docker build -f deploy/Dockerfile -t frpmgr-server:$(VERSION) --build-arg VERSION=$(VERSION) --build-arg BUILD_DATE=$(BUILD_DATE) .
+# Docker 镜像构建：先在宿主机 npm build 生成 web/dist/，再交给
+# Dockerfile 的 COPY . . 把 dist 一并拷进去，让 //go:embed dist 工作。
+# 这样 Dockerfile 保持单一职责（只跑 go build），不必拉 node 镜像层。
+docker: web
+	docker build -f deploy/Dockerfile -t frpmgr-server:$(VERSION) \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg BUILD_DATE=$(BUILD_DATE) \
+	  .
 
 run: build-host
 	FRPMGR_API_TOKEN=dev FRPMGR_DATA_DIR=./tmp/data ./bin/frpmgrd serve

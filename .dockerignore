@@ -8,3 +8,19 @@ docs/
 !LICENSE
 .golangci.yml
 .gitignore
+
+# 前端开发产物 —— web/dist/ 必须保留（//go:embed dist 需要它），
+# 但 node_modules / vite 缓存 / source map 等可以全部丢掉，
+# 让 build context 上传更快。
+web/node_modules/
+web/.vite/
+web/dist/**/*.map
+
+# Windows 本地构建产物
+*.exe
+*.exe~
+
+# Claude / 编辑器临时
+.claude/
+.idea/
+.vscode/
