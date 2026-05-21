@@ -17,15 +17,8 @@ import (
 	"github.com/mia-clark/frp-manager-server/pkg/config"
 	"github.com/mia-clark/frp-manager-server/pkg/consts"
 	"github.com/mia-clark/frp-manager-server/pkg/util"
+	"github.com/mia-clark/frp-manager-server/services"
 )
-
-// runnerBuilder is the hook used by an instance to create its frpc
-// runtime backend (in-process or exec subprocess). Manager populates it
-// with a closure that reads the meta.json frpc version override + the
-// local binary store. When nil, instance falls back to the in-process
-// embedded library — preserving legacy behavior for callers that haven't
-// migrated yet.
-type runnerBuilder func(id, configPath string) (runner, error)
 
 // instance owns a single frpc client lifecycle. The Manager holds these
 // inside a map keyed by config id.
@@ -41,13 +34,10 @@ type instance struct {
 	stopAt  time.Time
 
 	// run-time fields (zero unless running)
-	svc      runner
+	svc      *services.FrpClientService
 	cancel   context.CancelFunc
 	runWG    sync.WaitGroup
 	autoDel  *time.Timer
-
-	// runnerBuilder is invoked from start() to pick in-proc vs exec
-	build runnerBuilder
 
 	// proxy status cache, refreshed by statusPoller
 	psMu       sync.RWMutex
@@ -228,16 +218,9 @@ func (i *instance) start(ctx context.Context) error {
 	}
 	i.state = consts.ConfigStateStarting
 	i.lastErr = ""
-	build := i.build
 	i.mu.Unlock()
 
-	var svc runner
-	var err error
-	if build != nil {
-		svc, err = build(i.id, i.path)
-	} else {
-		svc, err = newInProcRunner(i.path)
-	}
+	svc, err := services.NewFrpClientService(i.path)
 	if err != nil {
 		i.recordError(err)
 		i.setState(consts.ConfigStateStopped)
@@ -327,7 +310,7 @@ func (i *instance) recordError(err error) {
 
 // runLoop runs the frp client in the same goroutine that owns the svc.
 // A panic is recovered, logged, and the instance transitions to stopped.
-func (i *instance) runLoop(ctx context.Context, svc runner) {
+func (i *instance) runLoop(ctx context.Context, svc *services.FrpClientService) {
 	defer i.runWG.Done()
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -362,7 +345,7 @@ func (i *instance) runLoop(ctx context.Context, svc runner) {
 	}
 }
 
-func (i *instance) statusPoller(ctx context.Context, svc runner) {
+func (i *instance) statusPoller(ctx context.Context, svc *services.FrpClientService) {
 	defer i.runWG.Done()
 	statusT := time.NewTicker(500 * time.Millisecond)
 	defer statusT.Stop()
@@ -528,7 +511,7 @@ func atoiU16(s string) (uint16, bool) {
 	return uint16(n), true
 }
 
-func (i *instance) refreshProxyStats(svc runner) {
+func (i *instance) refreshProxyStats(svc *services.FrpClientService) {
 	data := i.Data()
 	if data == nil {
 		return
