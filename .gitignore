@@ -4,6 +4,8 @@ tmp/
 data/
 *.syso
 *.exe
+*.exe~
 .env
 .idea/
 .vscode/
+web/.vite/

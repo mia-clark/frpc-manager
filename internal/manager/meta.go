@@ -9,16 +9,40 @@ import (
 )
 
 // Meta is the persisted daemon-level metadata stored at /data/meta.json.
-// It tracks which configs should be auto-started and the user-defined
-// display order. Anything else lives in the config files themselves.
+// It tracks which configs should be auto-started, the user-defined
+// display order, the active frpc binary version, the GitHub mirror used
+// for downloading new versions, and the per-instance run-mode override.
+// Anything else lives in the config files themselves.
 type Meta struct {
-	Version   int      `json:"version"`
+	Version int `json:"version"`
+
 	AutoStart []string `json:"auto_start"`
 	Sort      []string `json:"sort"`
+
+	// FrpcDefaultVersion is the label (e.g. "0.68.1") of the frpc binary
+	// instances should use unless they override it. Empty = use the
+	// daemon's in-process embedded frp library (current default behavior).
+	FrpcDefaultVersion string `json:"frpc_default_version,omitempty"`
+
+	// FrpcInstanceVersions stores per-instance overrides keyed by config id.
+	// Value "" means "follow FrpcDefaultVersion"; value "in-process" forces
+	// the embedded library regardless of the default.
+	FrpcInstanceVersions map[string]string `json:"frpc_instance_versions,omitempty"`
+
+	// GithubMirror is the URL prefix used to rewrite github.com download
+	// URLs for new frpc versions. Empty = direct connection.
+	GithubMirror string `json:"github_mirror,omitempty"`
 }
 
+const InProcessVersion = "in-process"
+
 func defaultMeta() *Meta {
-	return &Meta{Version: 1, AutoStart: []string{}, Sort: []string{}}
+	return &Meta{
+		Version:              1,
+		AutoStart:            []string{},
+		Sort:                 []string{},
+		FrpcInstanceVersions: map[string]string{},
+	}
 }
 
 type metaStore struct {
@@ -42,6 +66,9 @@ func openMetaStore(path string) (*metaStore, error) {
 		if s.data.Sort == nil {
 			s.data.Sort = []string{}
 		}
+		if s.data.FrpcInstanceVersions == nil {
+			s.data.FrpcInstanceVersions = map[string]string{}
+		}
 	case errors.Is(err, os.ErrNotExist):
 		// fresh install; write a stub so operators can see the file
 		if err := s.flushLocked(); err != nil {
@@ -59,7 +86,45 @@ func (s *metaStore) snapshot() Meta {
 	m := *s.data
 	m.AutoStart = append([]string(nil), s.data.AutoStart...)
 	m.Sort = append([]string(nil), s.data.Sort...)
+	m.FrpcInstanceVersions = make(map[string]string, len(s.data.FrpcInstanceVersions))
+	for k, v := range s.data.FrpcInstanceVersions {
+		m.FrpcInstanceVersions[k] = v
+	}
 	return m
+}
+
+// setFrpcDefaultVersion persists the global default frpc version label.
+// Pass "" to revert to in-process.
+func (s *metaStore) setFrpcDefaultVersion(v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.FrpcDefaultVersion = v
+	return s.flushLocked()
+}
+
+// setFrpcInstanceVersion sets / clears the per-instance run-mode override.
+// version values: "" = follow default, InProcessVersion = force in-process,
+// any other = use that installed binary.
+func (s *metaStore) setFrpcInstanceVersion(id, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.FrpcInstanceVersions == nil {
+		s.data.FrpcInstanceVersions = map[string]string{}
+	}
+	if version == "" {
+		delete(s.data.FrpcInstanceVersions, id)
+	} else {
+		s.data.FrpcInstanceVersions[id] = version
+	}
+	return s.flushLocked()
+}
+
+// setGithubMirror persists the GitHub mirror URL prefix.
+func (s *metaStore) setGithubMirror(url string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.GithubMirror = url
+	return s.flushLocked()
 }
 
 func (s *metaStore) setAutoStart(ids []string) error {
@@ -112,6 +177,9 @@ func (s *metaStore) dropIDs(ids ...string) error {
 	}
 	s.data.AutoStart = filterOut(s.data.AutoStart, idset)
 	s.data.Sort = filterOut(s.data.Sort, idset)
+	for id := range idset {
+		delete(s.data.FrpcInstanceVersions, id)
+	}
 	return s.flushLocked()
 }
 

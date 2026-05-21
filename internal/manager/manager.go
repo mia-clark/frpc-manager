@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/mia-clark/frp-manager-server/internal/eventbus"
+	"github.com/mia-clark/frp-manager-server/internal/frpcvers"
 	"github.com/mia-clark/frp-manager-server/pkg/config"
 )
 
@@ -34,7 +35,9 @@ type Manager struct {
 	mu        sync.RWMutex
 	instances map[string]*instance
 
-	meta *metaStore
+	meta       *metaStore
+	frpcStore  *frpcvers.Store    // local frpc binary repository
+	proxy      *frpcvers.ProxyManager // GitHub mirror for downloading versions
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -53,14 +56,98 @@ func New(opts Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open meta: %w", err)
 	}
+
+	// frpc binary repo lives next to other state dirs
+	frpcRoot := filepath.Join(filepath.Dir(opts.MetaPath), "frpc-versions")
+	proxy := frpcvers.NewProxyManager(meta.snapshot().GithubMirror)
+	store, err := frpcvers.NewStore(frpcRoot, proxy)
+	if err != nil {
+		return nil, fmt.Errorf("open frpc store: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		opts:       opts,
 		instances:  make(map[string]*instance),
 		meta:       meta,
+		frpcStore:  store,
+		proxy:      proxy,
 		rootCtx:    ctx,
 		rootCancel: cancel,
 	}, nil
+}
+
+// FrpcStore exposes the binary version repository to the API layer.
+func (m *Manager) FrpcStore() *frpcvers.Store { return m.frpcStore }
+
+// FrpcProxy exposes the GitHub mirror manager to the API layer.
+func (m *Manager) FrpcProxy() *frpcvers.ProxyManager { return m.proxy }
+
+// SetGithubMirror updates the active mirror and persists it.
+func (m *Manager) SetGithubMirror(url string) error {
+	m.proxy.Set(url)
+	return m.meta.setGithubMirror(url)
+}
+
+// SetDefaultFrpcVersion picks the installed binary that future starts
+// will use by default. Empty string reverts to the in-process embedded
+// frp library.
+func (m *Manager) SetDefaultFrpcVersion(version string) error {
+	if version != "" && version != InProcessVersion {
+		if _, err := m.frpcStore.Get(version); err != nil {
+			return err
+		}
+	}
+	if err := m.frpcStore.SetDefault(version); err != nil && version != "" && version != InProcessVersion {
+		return err
+	}
+	return m.meta.setFrpcDefaultVersion(version)
+}
+
+// SetInstanceFrpcVersion records the per-instance run-mode override.
+//   ""               → follow daemon default
+//   InProcessVersion → force embedded library
+//   <semver>         → use that installed binary
+func (m *Manager) SetInstanceFrpcVersion(id, version string) error {
+	if version != "" && version != InProcessVersion {
+		if _, err := m.frpcStore.Get(version); err != nil {
+			return err
+		}
+	}
+	return m.meta.setFrpcInstanceVersion(id, version)
+}
+
+// ResolveRunnerVersion picks the effective frpc version label for an
+// instance: explicit override > meta default > "" (= in-process).
+func (m *Manager) ResolveRunnerVersion(id string) string {
+	snap := m.meta.snapshot()
+	if v, ok := snap.FrpcInstanceVersions[id]; ok && v != "" {
+		return v
+	}
+	if snap.FrpcDefaultVersion != "" {
+		return snap.FrpcDefaultVersion
+	}
+	return ""
+}
+
+// buildRunner constructs the per-instance runner backend. It honors the
+// per-instance override first, then the daemon-wide default frpc binary,
+// and falls back to the in-process embedded library when nothing else is
+// configured.
+func (m *Manager) buildRunner(id, configPath string) (runner, error) {
+	version := m.ResolveRunnerVersion(id)
+	if version == "" || version == InProcessVersion {
+		return newInProcRunner(configPath)
+	}
+	inst, err := m.frpcStore.Get(version)
+	if err != nil {
+		// Don't silently fall back — the user explicitly asked for an
+		// external version and seeing it broken at startup is preferable
+		// to silently running the wrong binary.
+		return nil, fmt.Errorf("frpc version %q not installed: %w", version, err)
+	}
+	logPath := filepath.Join(m.opts.LogsDir, id+".log")
+	return newExecRunner(inst.Path, configPath, logPath, version, m.opts.Logger), nil
 }
 
 // Bus exposes the event bus so the API layer can subscribe.
@@ -90,6 +177,7 @@ func (m *Manager) LoadAll() error {
 			data.ClientCommon.Name = id
 		}
 		inst := newInstance(id, f, data, m.opts.Logger, m.opts.Bus)
+		inst.build = m.buildRunner
 		m.mu.Lock()
 		m.instances[id] = inst
 		m.mu.Unlock()
@@ -205,6 +293,7 @@ func (m *Manager) Create(id string, data *config.ClientConfig) error {
 		data.ClientCommon.Name = id
 	}
 	inst := newInstance(id, path, data, m.opts.Logger, m.opts.Bus)
+	inst.build = m.buildRunner
 	m.mu.Lock()
 	m.instances[id] = inst
 	m.mu.Unlock()

@@ -50,6 +50,7 @@ func NewRouter(d Deps) http.Handler {
 	logs := NewLogsHandler(d.Manager, d.Cfg.LogsDir, d.Logger, d.Cfg.CORSOrigins)
 	imex := NewImportExportHandler(d.Manager, d.Logger)
 	nat := NewNatholeHandler()
+	versions := NewVersionsHandler(d.Manager, d.Logger)
 
 	// Authenticated subtree.
 	r.Group(func(r chi.Router) {
@@ -96,6 +97,17 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/api/v1/export/all", imex.ExportAll)
 
 		r.Post("/api/v1/nathole/discover", nat.Discover)
+
+		// frpc 二进制版本仓库 + GitHub 镜像代理管理
+		r.Get("/api/v1/versions/available", versions.Available)
+		r.Get("/api/v1/versions/installed", versions.Installed)
+		r.Post("/api/v1/versions/download", versions.Download)
+		r.Delete("/api/v1/versions/{version}", versions.Delete)
+		r.Put("/api/v1/versions/default", versions.SetDefault)
+		r.Get("/api/v1/versions/mirror", versions.MirrorList)
+		r.Put("/api/v1/versions/mirror", versions.MirrorSet)
+		r.Post("/api/v1/versions/mirror/ping", versions.MirrorPing)
+		r.Put("/api/v1/configs/{id}/runner", versions.InstanceRunner)
 
 		r.Get("/api/v1/system/info", sys.Info)
 		r.Get("/api/v1/system/cpu", sys.CPU)

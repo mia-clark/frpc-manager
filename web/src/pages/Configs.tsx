@@ -22,6 +22,8 @@ import {
   MenuUnfoldOutlined,
   DownloadOutlined,
   ExclamationCircleOutlined,
+  DownOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
 
 const LIST_COMPACT_KEY = 'frpmgr_configs_compact';
@@ -1048,22 +1050,30 @@ const Configs: React.FC = () => {
                       <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                           <Text type="secondary">代理：把本地端口穿透到公网。访客：连接到对端 STCP/SUDP/XTCP 安全代理。</Text>
-                          <Space.Compact>
+                          <Space size={8}>
                             <Button
                               type="primary"
-                              icon={<PlusOutlined />}
-                              size="small"
+                              icon={<ThunderboltOutlined />}
                               onClick={() => openProxyDrawer(undefined, 'proxy')}
                             >
-                              添加代理
+                              新增代理
                             </Button>
-                            <Button
-                              size="small"
-                              onClick={() => openProxyDrawer(undefined, 'visitor')}
+                            <Dropdown
+                              menu={{
+                                items: [
+                                  {
+                                    key: 'add-visitor',
+                                    icon: <ApiOutlined />,
+                                    label: '添加访客 (Visitor)',
+                                    onClick: () => openProxyDrawer(undefined, 'visitor'),
+                                  },
+                                ],
+                              }}
+                              placement="bottomRight"
                             >
-                              添加访客
-                            </Button>
-                          </Space.Compact>
+                              <Button icon={<DownOutlined />} />
+                            </Dropdown>
+                          </Space>
                         </div>
                         <Table
                           dataSource={proxies}
