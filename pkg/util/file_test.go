@@ -2,6 +2,7 @@ package util
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -13,7 +14,8 @@ func TestSplitExt(t *testing.T) {
 		expectedName string
 		expectedExt  string
 	}{
-		{input: "C:\\test\\a.ini", expectedName: "a", expectedExt: ".ini"},
+		// 用 filepath.Join 构造平台相关分隔符，避免 Windows 字面量在 Linux 上失败
+		{input: filepath.Join("dir", "a.ini"), expectedName: "a", expectedExt: ".ini"},
 		{input: "b.exe", expectedName: "b", expectedExt: ".exe"},
 		{input: "c", expectedName: "c", expectedExt: ""},
 		{input: "", expectedName: "", expectedExt: ""},
