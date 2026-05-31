@@ -511,6 +511,19 @@ const Configs: React.FC = () => {
     }
   };
 
+  // 清空日志：调用后端 DELETE 真删日志文件，再清前端缓冲。
+  // 注意：日志由运行中的 frpc 持续写入，清空的是「历史」；之后新产生的行仍会实时推送进来。
+  const handleClearMiniLogs = async (id: string) => {
+    if (!id) return;
+    try {
+      await client.delete(`/api/v1/configs/${id}/logs`);
+      setMiniLogLines([]);
+      message.success('日志已清空');
+    } catch (err: any) {
+      message.error('清空失败: ' + (err.response?.data?.error?.message || err.message));
+    }
+  };
+
   // tab 离开 logs / 切换实例 / 组件卸载 时断开 WS，避免泄露与无谓流量
   useEffect(() => {
     if (activeTab !== 'logs') {
@@ -763,15 +776,18 @@ const Configs: React.FC = () => {
     return `${role}-${id}`;
   };
 
-  // 开启 Drawer（新建 / 编辑）
-  const openProxyDrawer = (proxyItem?: any, initialKind: 'proxy' | 'visitor' = 'proxy') => {
-    setEditingProxy(proxyItem);
+  // 开启 Drawer（新建 / 编辑 / 复制）
+  // asCopy=true：以「新建」模式打开，但用源规则数据预填表单、名称换成随机名，
+  // 实现「复制添加」——减少重复输入。
+  const openProxyDrawer = (proxyItem?: any, initialKind: 'proxy' | 'visitor' = 'proxy', asCopy = false) => {
+    // 复制时不进入编辑模式（保证名称可改、提交走 POST 新建）
+    setEditingProxy(asCopy ? undefined : proxyItem);
     if (proxyItem) {
       const kind: 'proxy' | 'visitor' = proxyItem._kind || 'proxy';
       const pl = proxyItem.plugin || {};
       proxyForm.setFieldsValue({
         kind,
-        name: proxyItem.name,
+        name: asCopy ? genRuleName() : proxyItem.name,
         type: proxyItem.type || 'tcp',
         // proxy / server-side 字段
         localIP: proxyItem.localIP || '127.0.0.1',
@@ -1171,7 +1187,12 @@ const Configs: React.FC = () => {
                               title: '操作',
                               render: (_, record) => (
                                 <Space>
-                                  <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openProxyDrawer(record)} />
+                                  <Tooltip title="编辑">
+                                    <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openProxyDrawer(record)} />
+                                  </Tooltip>
+                                  <Tooltip title="复制添加（沿用配置、自动生成新名称）">
+                                    <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => openProxyDrawer(record, record._kind, true)} />
+                                  </Tooltip>
                                   <Popconfirm
                                     title="确定删除此代理规则？"
                                     onConfirm={() => handleDeleteProxy(record.name)}
@@ -1620,7 +1641,7 @@ const Configs: React.FC = () => {
                             <Button
                               size="small"
                               icon={<DeleteOutlined />}
-                              onClick={() => setMiniLogLines([])}
+                              onClick={() => handleClearMiniLogs(activeConfigId)}
                             >
                               清空
                             </Button>
