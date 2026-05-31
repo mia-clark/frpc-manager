@@ -4,7 +4,6 @@ import {
   DashboardOutlined,
   ClusterOutlined,
   FileTextOutlined,
-  AlertOutlined,
   HddOutlined,
   ToolOutlined,
   SettingOutlined,
@@ -80,7 +79,6 @@ const MainLayout: React.FC = () => {
         label: '总览',
         children: [
           { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-          { key: '/events', icon: <AlertOutlined />, label: '事件中心' },
         ],
       },
       {

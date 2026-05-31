@@ -8,7 +8,6 @@ import Configs from './pages/Configs';
 import Logs from './pages/Logs';
 import ImportExport from './pages/ImportExport';
 
-const Events = lazy(() => import('./pages/Events'));
 const SystemPage = lazy(() => import('./pages/System'));
 const ToolsValidate = lazy(() => import('./pages/ToolsValidate'));
 const ToolsNat = lazy(() => import('./pages/ToolsNat'));
@@ -38,7 +37,6 @@ function App() {
           <Route path="/" element={<MainLayout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
-            <Route path="events" element={<Events />} />
             <Route path="configs" element={<Configs />} />
             <Route path="logs" element={<Logs />} />
             <Route path="system" element={<SystemPage />} />

@@ -376,7 +376,6 @@ const Dashboard: React.FC = () => {
             title={<Space><AlertOutlined /> 实时事件</Space>}
             styles={{ body: { padding: 0 } }}
             style={{ borderRadius: 10 }}
-            extra={<Link to="/events">查看全部</Link>}
           >
             <List
               size="small"
