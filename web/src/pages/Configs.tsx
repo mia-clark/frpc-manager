@@ -1681,6 +1681,7 @@ const Configs: React.FC = () => {
         title="新建配置文件"
         open={newConfigModalOpen}
         onCancel={() => setNewConfigModalOpen(false)}
+        maskClosable={false}
         footer={null}
         destroyOnClose
       >
