@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -118,20 +119,30 @@ func NewRouter(d Deps) http.Handler {
 		}
 
 		filePath := strings.TrimPrefix(r.URL.Path, "/")
-		if filePath == "" {
-			filePath = "index.html"
+
+		// 存在的静态资源（js/css/图片等）交给 FileServer 处理
+		if filePath != "" {
+			if f, err := webFS.Open(filePath); err == nil {
+				f.Close()
+				fileServer.ServeHTTP(w, r)
+				return
+			}
 		}
 
-		// 检查内嵌的文件系统中是否存在请求的文件
-		f, err := webFS.Open(filePath)
+		// 文件不存在（前端 BrowserRouter 的深链接，如 /configs）→ 直接返回 index.html
+		// 让前端路由接管。
+		//
+		// 注意：不能改写成 r.URL.Path = "/index.html" 再走 FileServer——http.FileServer
+		// 会把任何以 /index.html 结尾的请求 301 重定向到 "./"，导致刷新任意子页面都被
+		// 重定向回首页。因此这里直接读取并写出 index.html 内容。
+		index, err := fs.ReadFile(webFS, "index.html")
 		if err != nil {
-			// 文件不存在，重写请求路径为 index.html 达成前端 SPA 路由接管
-			r.URL.Path = "/index.html"
-		} else {
-			f.Close()
+			http.NotFound(w, r)
+			return
 		}
-
-		fileServer.ServeHTTP(w, r)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(index)
 	})
 
 	return r
