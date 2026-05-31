@@ -1,91 +1,25 @@
-# docker-compose.standalone.yml
-#
-# Standalone deployment — pulls a pre-built image from GHCR, no source
-# checkout required. Drop this file plus an `.env` file into any
-# directory and run `docker compose -f docker-compose.standalone.yml up -d`.
-#
-# Get an image tag from:
-#   https://github.com/mia-clark/frp-manager-server/pkgs/container/frp-manager-server
-#
-# Quick start:
-#   curl -O https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/deploy/docker-compose.standalone.yml
-#   curl -O https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/deploy/.env.example
-#   mv .env.example .env
-#   # edit .env: set FRPMGR_API_TOKEN to a long random string
-#   docker compose -f docker-compose.standalone.yml up -d
-#   curl http://localhost:8080/api/v1/health
-#
-# Storage
-#   The image initializes /data ownership internally on startup
-#   (entrypoint runs as root briefly, then drops to UID 65532 via
-#   su-exec). Works the same for named volumes and host bind mounts —
-#   no sidecar, no host-side chown needed.
 
 services:
   frpmgrd:
     image: ghcr.io/mia-clark/frp-manager-server:${FRPMGR_IMAGE_TAG:-latest}
     container_name: docker_frpmgrd
     restart: always
-
-    # ------------------------------------------------------------------
-    # Network mode — pick ONE of the two blocks below.
-    #
-    # (A) host network  [recommended]
-    #     frpc out-bound connections and xtcp/NAT hole-punching work
-    #     without surprises. The API still listens on the host's
-    #     FRPMGR_HTTP_PORT (default 8080).
-    # ------------------------------------------------------------------
     network_mode: host
-
-    # ------------------------------------------------------------------
-    # (B) bridge network  [stricter isolation, comment out (A) and
-    #     uncomment this block + the `ports:` section]
-    # ------------------------------------------------------------------
-    # networks:
-    #   - frpmgr
-    # ports:
-    #   - "${FRPMGR_HTTP_PORT:-8080}:8080"
-    #   # add explicit port mappings for every frpc local_port you proxy:
-    #   # - "22:22"
-    #   # - "8080:8080"
-
     environment:
       # --- required ---
       FRPMGR_API_TOKEN: ${FRPMGR_API_TOKEN:-admin@local}
 
       # --- optional ---
-      FRPMGR_HTTP_ADDR: ":${FRPMGR_HTTP_PORT:-8080}"
+      FRPMGR_HTTP_ADDR: ":${FRPMGR_HTTP_PORT:-17200}"
       FRPMGR_CORS_ORIGINS: ${FRPMGR_CORS_ORIGINS:-*}
       FRPMGR_LOG_LEVEL: ${FRPMGR_LOG_LEVEL:-info}
       FRPMGR_DOCS_ENABLED: ${FRPMGR_DOCS_ENABLED:-true}
       TZ: ${TZ:-UTC}
 
-    # ------------------------------------------------------------------
-    # Storage — default is a docker named volume. Swap to a host bind
-    # mount if you want to edit profiles/*.toml directly from the host;
-    # the entrypoint will chown it on first start either way.
-    # ------------------------------------------------------------------
     volumes:
-      - frpmgr-data:/data
-      # Host bind mount alternative (uncomment + replace the line above):
+      - ./frpmgr-data:/data
       # - ${FRPMGR_DATA_DIR:-./data}:/data
 
-    healthcheck:
-      test:
-        - CMD
-        - /usr/local/bin/frpmgrd
-        - health
-        - -addr
-        - http://127.0.0.1:${FRPMGR_HTTP_PORT:-8080}
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-    # ------------------------------------------------------------------
-    # Log rotation — Docker's default json-file driver grows without
-    # bound. These limits keep at most 50 MB of logs per container.
-    # ------------------------------------------------------------------
     logging:
       driver: json-file
       options:
@@ -110,9 +44,6 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "${FRPMGR_AUTOUPDATE:-false}"
 
-volumes:
-  frpmgr-data:
-    name: frpmgr-data
 
 # networks:
 #   frpmgr:
