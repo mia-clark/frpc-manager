@@ -34,7 +34,7 @@ description: Use this skill whenever you are about to write, modify, or debug AN
    - 中间用到的转换函数（`toV1` / `fromV1` / `ClientProxyFromV1` 等）
    - 返回值（`WriteJSON(w, status, v)` 中的 `v`）— 这是**出参契约**
 3. 若返回的是 `manager.Snapshot` / `ProxySnapshot` 等结构体，再打开 [internal/manager/instance.go](../../../internal/manager/instance.go) 看 JSON 标签，确认是 camelCase 还是 snake_case。
-4. 若入参/出参里出现 `ClientConfigV1` / `TypedProxyConfig`，必须再翻到 [pkg/config/v1.go](../../../pkg/config/v1.go) 与上游 `github.com/fatedier/frp/pkg/config/v1`（`$(go env GOMODCACHE)/github.com/fatedier/frp@v0.68.1/pkg/config/v1/`）核对 JSON 标签。
+4. 若入参/出参里出现 `ClientConfigV1` / `TypedProxyConfig`，必须再翻到 [pkg/config/v1.go](../../../pkg/config/v1.go) 与上游 `github.com/fatedier/frp/pkg/config/v1`（`$(go env GOMODCACHE)/github.com/fatedier/frp@v0.69.1/pkg/config/v1/`）核对 JSON 标签。
 
 ### Step 2 — 整理"入参 / 出参字段表"
 

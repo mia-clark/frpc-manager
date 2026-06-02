@@ -1,6 +1,6 @@
-// frp 0.68 客户端配置参考片段集
+// frp 0.69 客户端配置参考片段集
 //
-// 数据源：上游 fatedier/frp@v0.68.1 的 conf/frpc_full_example.toml + pkg/config/v1
+// 数据源：上游 fatedier/frp@v0.69.1 的 conf/frpc_full_example.toml + pkg/config/v1
 // 所有片段都是合法 TOML，可直接粘贴到「高级 TOML 配置」编辑器或 frpc.toml 文件。
 // 中文注释由本项目维护，与 frpmgr WebUI 的可视化字段一一对应。
 

@@ -69,11 +69,11 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `daemon` | string | `frpmgrd` 版本号（例 `"dev"`） |
-| `frp` | string | 内嵌的 frp 版本（例 `"0.68.1"`） |
+| `frp` | string | 内嵌的 frp 版本（例 `"0.69.1"`） |
 | `build_date` | string | 构建时间，未注入时为 `"unknown"` |
 
 ```json
-{ "daemon": "dev", "frp": "0.68.1", "build_date": "unknown" }
+{ "daemon": "dev", "frp": "0.69.1", "build_date": "unknown" }
 ```
 
 ---
@@ -302,7 +302,7 @@
 }
 ```
 
-`visitor` 内层为 `v1.TypedVisitorConfig`，字段（[`visitor.go`](https://pkg.go.dev/github.com/fatedier/frp@v0.68.1/pkg/config/v1)）：
+`visitor` 内层为 `v1.TypedVisitorConfig`，字段（[`visitor.go`](https://pkg.go.dev/github.com/fatedier/frp@v0.69.1/pkg/config/v1)）：
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -710,7 +710,7 @@ func (c *TypedProxyConfig) MarshalJSON() ([]byte, error) {
 
 ---
 
-## 11. 真实抓包样例（探测自 `frpmgrd-dev.exe` v0.68.1）
+## 11. 真实抓包样例（探测自 `frpmgrd-dev.exe` v0.69.1）
 
 ```text
 POST /api/v1/configs                        201

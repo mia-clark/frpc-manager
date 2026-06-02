@@ -5,7 +5,7 @@
 
 简单说：你不用再手动写一堆 `frpc.toml`、再用 `systemctl` 一个个管理了。装上它，打开网页，点点鼠标就能新增/启动/停止/查看日志/监控你的所有穿透隧道。
 
-> 本项目从 Windows 桌面版 [frpmgr](https://github.com/mia-clark/frp-manager-server) 演化而来，去掉了 Windows GUI，保留了配置模型、热重载和内嵌 frpc 的能力，改造成 Linux/服务器友好的服务。内置 frp `v0.68.1`。
+> 本项目从 Windows 桌面版 [frpmgr](https://github.com/mia-clark/frp-manager-server) 演化而来，去掉了 Windows GUI，保留了配置模型、热重载和内嵌 frpc 的能力，改造成 Linux/服务器友好的服务。内置 frp `v0.69.1`。
 
 ---
 
