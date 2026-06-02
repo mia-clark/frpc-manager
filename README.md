@@ -1,135 +1,231 @@
-# frpmgr-server
+# frpmgr-server（frpmgrd）
 
-Headless FRP client manager — manages multiple `frpc` instances inside a single Linux process, exposes the full management surface over HTTP + WebSocket. Designed for Docker.
+> 一个用浏览器就能管理多条 frp 内网穿透隧道的「FRP 客户端管理器」。
+> 一个进程同时跑多个 `frpc`，自带 **Web 管理界面** + 完整 **API**，开机自启、热重载，专为服务器/Docker 设计。
 
-> Forked from the Windows GUI tool [frpmgr](https://github.com/mia-clark/frp-manager-server). The Windows GUI is gone; the configuration model, hot-reload, and frpc embedding are kept. See [`docs/superpowers/specs/2026-05-20-frpmgr-docker-migration-design.md`](docs/superpowers/specs/2026-05-20-frpmgr-docker-migration-design.md) for the migration rationale.
+简单说：你不用再手动写一堆 `frpc.toml`、再用 `systemctl` 一个个管理了。装上它，打开网页，点点鼠标就能新增/启动/停止/查看日志/监控你的所有穿透隧道。
 
-## What it gives you
+> 本项目从 Windows 桌面版 [frpmgr](https://github.com/mia-clark/frp-manager-server) 演化而来，去掉了 Windows GUI，保留了配置模型、热重载和内嵌 frpc 的能力，改造成 Linux/服务器友好的服务。内置 frp `v0.68.1`。
 
-- **Multi-instance frpc** in one process (goroutines, not separate containers)
-- **Hot reload** without losing proxy state — same `svc.Reload` path the original GUI used
-- **Full REST API** covering config / proxy CRUD, lifecycle (start/stop/reload), validation, import/export, NAT-hole discovery
-- **WebSocket event stream** for state changes, proxy status diffs, errors, and live log tail
-- **Bearer-token auth** (single static token via env var) + configurable CORS
-- **OpenAPI 3.1** description ready to feed Swagger Codegen / openapi-typescript
+---
 
-The intended client is your own React/Vue webui — the API is built to be browser-friendly.
+## ✨ 它能帮你做什么
 
-## Install
+- 🖥️ **网页管理界面**：打开 `http://你的IP:端口/` 就是管理后台，新增/编辑/启停隧道、看实时日志、看监控，全在网页上完成。
+- 🔀 **一个进程管多条隧道**：多个 `frpc` 实例跑在同一个进程里（不是一堆容器），省资源、好管理。
+- ♻️ **热重载不断线**：改配置即时生效，已经连上的代理不掉线。
+- 🔌 **完整 REST API + WebSocket**：配置增删改查、启停重载、校验、导入导出、实时事件推送、实时日志，方便二次开发对接。
+- 🔐 **令牌鉴权**：单一 API 令牌（Bearer Token）保护后台，支持 CORS 配置。
+- 📊 **系统监控**：CPU / 内存 / 磁盘 / 网络 / 连接数，以及每条代理的当前连接数。
+- 📖 **在线接口文档**：内置 Scalar 文档，访问 `http://你的IP:端口/api/docs/` 可直接在线调试。
 
-### Option A — pre-built Docker image (recommended)
+---
+
+## 🚀 一键安装（推荐，macOS / Linux）
+
+复制下面**任意一条**命令到终端回车即可。脚本会自动识别你的系统和 CPU 架构，下载对应版本，安装并注册成开机自启的系统服务。
+
+**使用 curl：**
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/scripts/install.sh)"
+```
+
+**使用 wget：**
+
+```sh
+sh -c "$(wget -qO- https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/scripts/install.sh)"
+```
+
+安装过程会**交互式**地问你两件事（直接回车用默认值）：
+
+1. **监听端口**：回车=默认 `8080`，输入 `r`=随机端口，或自己输一个端口号。
+2. **API 令牌**：自己填一个，或直接回车自动生成一个强随机令牌（**请务必保存好，这是登录后台的唯一凭证**）。
+
+装完后终端会打印访问地址、令牌和常用命令。打开浏览器访问 `http://你的IP:端口/` 即可使用。
+
+### 想要不交互 / 自定义参数？
+
+脚本支持命令行参数任意组合，参数已传入的项就不再询问：
+
+```sh
+# 先把脚本下载到本地
+curl -fsSL https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/scripts/install.sh -o install.sh
+
+sh install.sh -p 9000                      # 指定端口 9000，只问令牌
+sh install.sh -t 我的令牌                   # 指定令牌，只问端口
+sh install.sh -p 9000 -t 我的令牌           # 端口+令牌都指定，零交互（仅一次确认）
+sh install.sh -p 9000 -t 我的令牌 -y        # 完全静默安装
+sh install.sh --port random                # 随机端口
+sh install.sh -v v1.2.10 -p 8888           # 指定版本 + 端口
+sh install.sh --help                       # 查看全部参数
+```
+
+也支持用环境变量（适合自动化/CI）：
+
+```sh
+FRPMGR_PORT=9000 FRPMGR_API_TOKEN=xxx ASSUME_YES=1 sh install.sh
+```
+
+### 卸载
+
+```sh
+sh install.sh --uninstall
+```
+
+会停止并移除系统服务、删除二进制；是否删除配置和数据目录会单独询问你。
+
+### 安装脚本支持的系统
+
+| 系统 | 服务方式 | 开机自启 |
+|---|---|---|
+| 主流 Linux（Ubuntu/Debian/CentOS/Rocky 等） | systemd | ✅ |
+| Alpine 等 | OpenRC | ✅ |
+| macOS | launchd | ✅ |
+| 其它（无 systemd/OpenRC） | 打印手动后台运行命令 | 需手动 |
+
+> CPU 架构自动识别：`amd64` / `arm64` / `armv7`（树莓派等）。Windows 用户请用下面的 Docker 方式，或到 [Releases](https://github.com/mia-clark/frp-manager-server/releases) 下载 Windows 版手动运行。
+
+---
+
+## 📦 其它安装方式
+
+### 方式一：Docker（推荐用于服务器）
 
 ```bash
-docker pull ghcr.io/mia-clark/frp-manager-server:latest
 docker run -d --name frpmgrd --network host \
   -e FRPMGR_API_TOKEN="$(openssl rand -hex 32)" \
   -v $(pwd)/data:/data \
   ghcr.io/mia-clark/frp-manager-server:latest
 ```
 
-Images are published on every push to `main` (tag `latest`, `main`, `main-<sha>`) and on every release tag (`vX.Y.Z`, `vX.Y`, `vX`).
+镜像在每次推送到 `main` 和每个发布标签时自动构建（支持 amd64 + arm64）。
 
-### Option B — pre-built CLI binary
+### 方式二：docker compose（免拉源码）
 
-Download from [releases](https://github.com/mia-clark/frp-manager-server/releases) — Linux (amd64/arm64/armv7), macOS (amd64/arm64), Windows (amd64/arm64).
-
-```bash
-# Linux amd64 example
-curl -L https://github.com/mia-clark/frp-manager-server/releases/latest/download/frpmgrd_*_linux_amd64.tar.gz | tar -xz
-FRPMGR_API_TOKEN=$(openssl rand -hex 32) ./frpmgrd serve
-```
-
-### Option C — standalone docker compose (no source checkout)
+在任意空目录里：
 
 ```bash
-# In any empty directory:
 curl -O https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/deploy/docker-compose.standalone.yml
 curl -O https://raw.githubusercontent.com/mia-clark/frp-manager-server/main/deploy/.env.example
 mv .env.example .env
-# Edit .env: set FRPMGR_API_TOKEN
+# 编辑 .env，至少把 FRPMGR_API_TOKEN 设成一个真实令牌
 docker compose -f docker-compose.standalone.yml up -d
 ```
 
-Pulls from `ghcr.io`, no local build. Includes log rotation, resource limits, Watchtower opt-in label, and host/bridge network blocks you can swap. Pin a specific image with `FRPMGR_IMAGE_TAG=v0.1.0`.
+### 方式三：手动下载二进制
 
-### Option D — docker compose (build locally)
-
-```bash
-git clone https://github.com/mia-clark/frp-manager-server.git
-cd frp-manager-server/deploy
-cp .env.example .env       # paste a real token
-docker compose up -d --build
-curl http://localhost:8080/api/v1/health
-```
-
-See **[`docs/README-server.md`](docs/README-server.md)** for the full deployment & API guide.
-
-## Repo layout
-
-```
-cmd/frpmgrd/        # daemon entrypoint
-internal/api/       # HTTP + WebSocket handlers, middleware
-internal/manager/   # instance registry + lifecycle (replaces Windows SCM)
-internal/eventbus/  # in-process pub/sub for WS push
-internal/logtail/   # tail -f for log files
-internal/appcfg/    # env var parsing
-pkg/config/         # FRP config model (INI/TOML, V1 conversion)
-pkg/consts/         # protocol/proxy type constants
-pkg/util/           # cross-platform helpers (file IO, strings)
-pkg/sec/            # password hashing
-pkg/version/        # version stamps
-services/           # FrpClientService wrapper (unchanged from upstream)
-deploy/             # Dockerfile, docker-compose.yml, .env.example
-docs/api/           # OpenAPI spec
-docs/superpowers/   # design spec + implementation plan
-```
-
-## Building
+到 [Releases](https://github.com/mia-clark/frp-manager-server/releases) 下载对应平台的压缩包（Linux amd64/arm64/armv7、macOS amd64/arm64、Windows amd64/arm64），解压后：
 
 ```bash
-make build          # Linux static binary -> bin/frpmgrd
-make build-host     # native (e.g. Windows for local dev) -> bin/frpmgrd
-make test           # go test ./...
-make docker         # docker build using deploy/Dockerfile
+FRPMGR_API_TOKEN=$(openssl rand -hex 32) ./frpmgrd serve
 ```
 
-## Status
+---
 
-| Milestone | What | Status |
-|---|---|---|
-| M1 | Scaffolding (cleanup, http server, /health) | done |
-| M2 | Manager + configs/proxies CRUD + lifecycle | done |
-| M3 | EventBus + WebSocket /events + log tail | done |
-| M4 | Import/export + AutoDelete + nathole | done |
-| M5 | Docker packaging + docs | done |
-| M6 | System/container metrics (`/api/v1/system/*`) + per-proxy connection count | done |
-| M7 | Embedded Scalar API docs at `/api/docs/` | done |
-| M8 | CI: Docker (multi-arch → ghcr.io) + Release (goreleaser, 7 platform binaries) | done |
+## 🧭 安装后怎么用
 
-## Releasing
+| 用途 | 地址 / 命令 |
+|---|---|
+| **Web 管理界面** | `http://你的IP:端口/` |
+| **在线 API 文档** | `http://你的IP:端口/api/docs/` |
+| **健康检查** | `curl http://你的IP:端口/api/v1/health` |
+| **调用 API**（需带令牌） | `curl -H "Authorization: Bearer 你的令牌" http://你的IP:端口/api/v1/version` |
 
-Tag a commit on `main` to trigger the full release pipeline:
+> 第一次打开 Web 界面，需要填入安装时设置/生成的 **API 令牌** 才能登录。忘了令牌？看配置文件（见下）。
+
+### 服务管理常用命令
+
+**systemd（多数 Linux）：**
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+systemctl status frpmgrd      # 查看状态
+journalctl -u frpmgrd -f      # 看实时日志
+systemctl restart frpmgrd     # 重启
+systemctl stop frpmgrd        # 停止
 ```
 
-This fires two parallel workflows:
+**macOS（launchd）：**
 
-1. **`Docker`** — builds and pushes `ghcr.io/mia-clark/frp-manager-server:0.1.0` plus `0.1`, `0`, and updates `latest` (multi-arch: amd64 + arm64).
-2. **`Release`** — cross-compiles 7 binaries via `goreleaser`, generates `checksums.txt`, drafts a GitHub Release with auto-generated changelog.
+```bash
+sudo launchctl list | grep frpmgrd   # 查看状态
+tail -f /var/log/frpmgrd.log         # 看日志
+```
 
-For a snapshot build without tagging: `Actions → Release → Run workflow` with empty tag input — produces a downloadable artifact for testing.
+---
 
-### First-time GitHub setup
+## ⚙️ 配置说明
 
-Both workflows need:
-- **Settings → Actions → General → Workflow permissions** → set to **Read and write**
-- **Settings → Packages → Manage Actions access** → ensure repo has write access (auto-granted by `GITHUB_TOKEN` permissions in the workflow)
+一键安装后，配置写在环境变量文件里（systemd 服务读取它）：
 
-The first `ghcr.io` push makes the package; afterwards visit https://github.com/users/mia-clark/packages and set visibility to public if desired.
+- **Linux**：`/etc/frpmgrd/frpmgrd.env`（数据目录 `/var/lib/frpmgrd`）
+- **macOS**：配置写在 launchd plist 里（数据目录 `/usr/local/var/frpmgrd`）
 
-## License
+改完配置后 `systemctl restart frpmgrd` 生效。可用的环境变量：
 
-Same as upstream — see [`LICENSE`](LICENSE).
+| 变量 | 必填 | 默认 | 说明 |
+|---|---|:---:|---|
+| `FRPMGR_API_TOKEN` | ✓ | — | API 鉴权令牌（登录后台的凭证） |
+| `FRPMGR_HTTP_ADDR` |   | `:8080` | 监听地址，格式 `:端口` |
+| `FRPMGR_DATA_DIR`  |   | `/data` | 数据根目录 |
+| `FRPMGR_CORS_ORIGINS` |   | `*` | 逗号分隔的 CORS 白名单 |
+| `FRPMGR_LOG_LEVEL` |   | `info` | `trace`/`debug`/`info`/`warn`/`error` |
+| `FRPMGR_DOCS_ENABLED` |   | `true` | 是否开放 `/api/docs` 在线文档 |
+
+### 数据目录结构
+
+```
+数据目录/
+  ├── profiles/   # 每条隧道一个 .toml 配置文件
+  ├── logs/       # frpc 日志，自动按天轮换
+  ├── stores/     # frp visitor 状态（xtcp/visitor 用）
+  └── meta.json   # 自启动列表 + 排序
+```
+
+> 升级、重装时只要保留数据目录，配置就不会丢。
+
+---
+
+## ❓ 常见问题
+
+- **打开网页提示 401 / 未授权？** 令牌填错了。核对 `/etc/frpmgrd/frpmgrd.env` 里的 `FRPMGR_API_TOKEN`。
+- **服务起不来 / 端口被占用？** 换个端口：改 `FRPMGR_HTTP_ADDR=:新端口` 后重启服务；或重装时用 `-p` 指定。
+- **隧道显示已启动但连不上 frps？** 多半是 frps 地址/端口/令牌不对。在 Web 界面看该隧道的实时日志排查。
+- **公网访问不了后台？** 检查服务器防火墙/安全组是否放行了你设置的端口。
+- **想换成开机不自启？** `systemctl disable frpmgrd`（macOS：卸载对应 launchd plist）。
+
+更详细的部署与 API 说明见 **[`docs/README-server.md`](docs/README-server.md)**。
+
+---
+
+## 🛠️ 开发与构建（给开发者）
+
+```bash
+make run            # 本地直接运行（主机模式）
+make test           # 跑单元测试
+make build          # 交叉编译 Linux 静态二进制 -> bin/frpmgrd
+make build-host     # 编译当前平台二进制（本地开发用）
+make docker         # 用 deploy/Dockerfile 构建镜像
+```
+
+### 目录结构
+
+```
+cmd/frpmgrd/        # 守护进程入口
+internal/api/       # HTTP + WebSocket 接口、中间件（含内嵌 Web 界面）
+internal/manager/   # 实例注册表 + 生命周期管理
+internal/eventbus/  # 进程内事件发布订阅（用于 WS 推送）
+internal/logtail/   # 日志实时 tail
+internal/appcfg/    # 环境变量解析
+pkg/config/         # FRP 配置模型（INI/TOML、V1 转换）
+web/                # 前端源码（编译产物 embed 进二进制）
+deploy/             # Dockerfile、docker-compose、.env.example
+docs/               # 部署文档 + OpenAPI 设计
+scripts/install.sh  # 一键安装脚本
+```
+
+---
+
+## 📄 许可证
+
+与上游一致，见 [`LICENSE`](LICENSE)。
