@@ -396,6 +396,168 @@ function Register-FrpmgrService {
     Write-Ok '服务已注册、启动并设置为开机自启'
 }
 
+# ----------------------------------------------------------------------------
+# 生成统一管理命令 fms (fms.cmd + fms.ps1), 并把安装目录加入系统 PATH
+#   之后在任意终端 (cmd / PowerShell) 都可直接执行 fms <命令>
+# ----------------------------------------------------------------------------
+function Install-Cli {
+    Write-Info '安装管理命令: fms'
+    $cliPs1 = Join-Path $InstallDir 'fms.ps1'
+    $cliCmd = Join-Path $InstallDir 'fms.cmd'
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+    # 头部: 注入安装期常量 (可展开 here-string; 用反引号转义运行期 $ 以保留字面量)
+    $head = @"
+# fms.ps1 — frpmgrd 管理命令 (由 install.ps1 自动生成, 请勿手动编辑)
+`$ServiceName = '$ServiceName'
+`$InstallDir  = '$InstallDir'
+`$BinName     = '$BinName'
+`$DataDir     = '$DataDir'
+`$LogDir      = '$LogDir'
+`$Repo        = '$Repo'
+"@
+
+    # 主体: 运行期逻辑 (字面 here-string, 内容原样写入生成文件)
+    $body = @'
+$ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+
+$BinPath  = Join-Path $InstallDir $BinName
+$NssmPath = Join-Path $InstallDir 'nssm.exe'
+$LogFile  = Join-Path $LogDir 'frpmgrd.log'
+$RawUrl   = "https://raw.githubusercontent.com/$Repo/main/scripts/install.ps1"
+# 允许用镜像源覆盖 install.ps1 下载地址 (适配国内网络)
+if ($env:FRPMGR_INSTALL_URL) { $RawUrl = $env:FRPMGR_INSTALL_URL }
+
+$AllArgs = @($args)
+$Cmd  = if ($AllArgs.Count -ge 1) { $AllArgs[0] } else { 'help' }
+$Rest = if ($AllArgs.Count -gt 1) { $AllArgs[1..($AllArgs.Count - 1)] } else { @() }
+
+function Test-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function Need-Admin {
+    if (Test-Admin) { return }
+    Write-Host '[*] 该操作需要管理员权限, 正在通过 UAC 提权...' -ForegroundColor Blue
+    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"") + $AllArgs
+    Start-Process -FilePath (Get-Process -Id $PID).Path -Verb RunAs -ArgumentList $a
+    exit 0
+}
+function Use-Nssm { Test-Path $NssmPath }
+
+function Do-Start   { Need-Admin; if (Use-Nssm) { & $NssmPath start $ServiceName } else { & sc.exe start $ServiceName }; Write-Host '[+] 服务已启动' -ForegroundColor Green }
+function Do-Stop    { Need-Admin; if (Use-Nssm) { & $NssmPath stop $ServiceName } else { & sc.exe stop $ServiceName }; Write-Host '[+] 服务已停止' -ForegroundColor Green }
+function Do-Restart { Need-Admin; if (Use-Nssm) { & $NssmPath restart $ServiceName } else { & sc.exe stop $ServiceName; Start-Sleep -Seconds 1; & sc.exe start $ServiceName }; Write-Host '[+] 服务已重启' -ForegroundColor Green }
+function Do-Status  { $s = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue; if ($s) { $s | Format-Table -AutoSize Status, Name, DisplayName } else { Write-Host '[!] 服务未安装' -ForegroundColor Yellow } }
+function Do-Enable  { Need-Admin; if (Use-Nssm) { & $NssmPath set $ServiceName Start SERVICE_AUTO_START | Out-Null } else { & sc.exe config $ServiceName start= auto | Out-Null }; Write-Host '[+] 已设置开机自启' -ForegroundColor Green }
+function Do-Disable { Need-Admin; if (Use-Nssm) { & $NssmPath set $ServiceName Start SERVICE_DEMAND_START | Out-Null } else { & sc.exe config $ServiceName start= demand | Out-Null }; Write-Host '[+] 已取消开机自启' -ForegroundColor Green }
+
+function Do-Logs {
+    if (-not (Test-Path $LogFile)) { Write-Host "[x] 未找到日志文件: $LogFile" -ForegroundColor Red; exit 1 }
+    $follow = $false
+    foreach ($r in $Rest) { if ($r -in @('-f', '--follow', 'follow')) { $follow = $true } }
+    if ($follow) { Get-Content -Path $LogFile -Tail 200 -Wait } else { Get-Content -Path $LogFile -Tail 200 }
+}
+function Do-Url {
+    $port = '8080'; $token = '(未读取到)'
+    if (Use-Nssm) {
+        $raw = & $NssmPath get $ServiceName AppEnvironmentExtra 2>$null
+        foreach ($line in $raw) {
+            if     ($line -match '^FRPMGR_HTTP_ADDR=(.*)$') { $port  = $Matches[1].TrimStart(':') }
+            elseif ($line -match '^FRPMGR_API_TOKEN=(.*)$') { $token = $Matches[1] }
+        }
+    }
+    Write-Host 'frpmgrd 访问信息'
+    Write-Host ("  访问地址 : http://127.0.0.1:{0}" -f $port)
+    Write-Host ("  API 文档 : http://127.0.0.1:{0}/api/docs" -f $port)
+    Write-Host ("  API 令牌 : {0}" -f $token)
+}
+function Do-Config {
+    if (-not (Use-Nssm)) { Write-Host '[x] 未找到 nssm.exe, 无法读取服务配置' -ForegroundColor Red; exit 1 }
+    $sub = if ($Rest.Count -ge 1) { $Rest[0] } else { 'show' }
+    if ($sub -eq 'edit') { Need-Admin; & $NssmPath edit $ServiceName }
+    else { & $NssmPath get $ServiceName AppEnvironmentExtra }
+}
+function Do-Version { & $BinPath version }
+function Invoke-Installer([object[]]$extra) {
+    Need-Admin
+    $tmp = Join-Path $env:TEMP ("frpmgr_install_" + [Guid]::NewGuid().ToString('N') + ".ps1")
+    Invoke-WebRequest -Uri $RawUrl -OutFile $tmp -UseBasicParsing -Headers @{ 'User-Agent' = 'frpmgrd-installer' }
+    try { & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp @extra }
+    finally { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+}
+function Show-Usage {
+    Write-Host @"
+fms — frpmgrd 管理命令
+
+用法: fms <命令> [参数]
+
+服务管理:
+  start            启动服务
+  stop             停止服务
+  restart          重启服务
+  status           查看运行状态
+  logs [-f]        查看日志 (加 -f 实时跟踪)
+  enable           设置开机自启
+  disable          取消开机自启
+
+信息查看:
+  url              显示访问地址与 API 令牌
+  config [edit]    查看 (或 edit 用 NSSM 图形界面编辑) 服务配置
+  version          显示版本信息
+
+安装维护:
+  install [参数]   重新安装 (参数透传给 install.ps1)
+  update [参数]    更新到最新版 (保留端口/令牌/数据)
+  uninstall        卸载
+
+  help             显示本帮助
+"@
+}
+
+switch ($Cmd.ToLower()) {
+    'start'     { Do-Start }
+    'stop'      { Do-Stop }
+    'restart'   { Do-Restart }
+    'status'    { Do-Status }
+    'logs'      { Do-Logs }
+    'enable'    { Do-Enable }
+    'disable'   { Do-Disable }
+    'url'       { Do-Url }
+    'config'    { Do-Config }
+    'version'   { Do-Version }
+    'update'    { Invoke-Installer (@('-Update') + $Rest) }
+    'install'   { Invoke-Installer $Rest }
+    'uninstall' {
+        Invoke-Installer @('-Uninstall')
+        Remove-Item -Force (Join-Path $InstallDir 'fms.cmd'), (Join-Path $InstallDir 'fms.ps1') -ErrorAction SilentlyContinue
+    }
+    default {
+        Show-Usage
+        if ($Cmd.ToLower() -notin @('help', '-h', '--help', '-help')) { exit 2 }
+    }
+}
+'@
+
+    # fms.ps1 含中文, 必须带 UTF-8 BOM, 否则 PowerShell 5.1 按 ANSI 解析会乱码/语法错
+    $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($cliPs1, ($head + "`r`n" + $body), $utf8Bom)
+    # fms.cmd 为纯 ASCII, 且 cmd.exe 不能带 BOM, 故用无 BOM 写入
+    $cmdShim = "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0fms.ps1`" %*`r`n"
+    [System.IO.File]::WriteAllText($cliCmd, $cmdShim, (New-Object System.Text.UTF8Encoding($false)))
+
+    # 确保安装目录在系统 PATH 中 (新开终端即可直接使用 fms)
+    $mp = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if ($mp -notlike "*$InstallDir*") {
+        [Environment]::SetEnvironmentVariable('Path', ($mp.TrimEnd(';') + ';' + $InstallDir), 'Machine')
+        Write-Info "已将 $InstallDir 加入系统 PATH (新开终端生效)"
+    }
+    if (($env:Path -split ';') -notcontains $InstallDir) { $env:Path = $env:Path.TrimEnd(';') + ';' + $InstallDir }
+    Write-Ok '管理命令已安装, 现在可使用: fms <命令>'
+}
+
 # 从已注册服务读取监听端口 (用于更新后健康检查)
 function Get-ServicePort {
     if (-not (Test-Service)) { return '' }
@@ -455,6 +617,7 @@ function Invoke-Install {
     Install-Binary
     Install-Nssm
     Register-FrpmgrService
+    Install-Cli
     Invoke-HealthCheck
     Write-Summary
 }
@@ -471,11 +634,16 @@ function Write-Summary {
     Write-Host ("  数据目录 : {0}" -f $DataDir)
     Write-Host ("  日志目录 : {0}" -f $LogDir)
     Write-Host '────────────────────────────────────────────'
-    Write-Host ("  状态: services.msc  或  sc query {0}" -f $ServiceName)
-    Write-Host ("  日志: Get-Content -Wait '{0}'" -f (Join-Path $LogDir 'frpmgrd.log'))
-    Write-Host ("  停止: nssm stop {0}   启动: nssm start {0}" -f $ServiceName)
-    Write-Host ("  更新: install.ps1 -Update")
-    Write-Host ("  卸载: install.ps1 -Uninstall")
+    Write-Host '  管理命令 (已加入 PATH, 新开终端任意目录可用):'
+    Write-Host '    fms start       # 启动服务'
+    Write-Host '    fms stop        # 停止服务'
+    Write-Host '    fms restart     # 重启服务'
+    Write-Host '    fms status      # 查看状态'
+    Write-Host '    fms logs -f     # 实时日志'
+    Write-Host '    fms url         # 查看地址与令牌'
+    Write-Host '    fms update      # 更新到最新版'
+    Write-Host '    fms uninstall   # 卸载'
+    Write-Host '    fms help        # 查看全部命令'
     Write-Host '────────────────────────────────────────────'
     Write-Warn '请妥善保存 API 令牌, 它是访问后台的唯一凭证!'
 }
@@ -507,6 +675,7 @@ function Invoke-Update {
     # 先停服务再覆盖, 避免 exe 被占用
     if (Test-Service) { & $script:NssmPath stop $ServiceName 2>$null | Out-Null; Start-Sleep -Milliseconds 500 }
     Install-Binary
+    Install-Cli                 # 顺带刷新管理命令 fms 到最新
     Restart-FrpmgrService
 
     $script:Port = Get-ServicePort
@@ -547,6 +716,9 @@ function Invoke-Uninstall {
         Remove-Item -Force $script:BinPath -ErrorAction SilentlyContinue
         Write-Ok "已删除二进制 $($script:BinPath)"
     }
+
+    # 删除管理命令 fms (fms.cmd + fms.ps1)
+    Remove-Item -Force (Join-Path $InstallDir 'fms.cmd'), (Join-Path $InstallDir 'fms.ps1') -ErrorAction SilentlyContinue
 
     $r = Read-Prompt "是否同时删除配置与数据目录 ($(Split-Path $DataDir -Parent))? [y/N]" 'N'
     if ($r -match '^(y|yes)$') {

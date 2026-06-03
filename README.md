@@ -199,21 +199,26 @@ FRPMGR_API_TOKEN=$(openssl rand -hex 32) ./frpmgrd serve
 
 ### 服务管理常用命令
 
-**systemd（多数 Linux）：**
+一键安装会附带一个统一管理命令 **`fms`**（已加入 PATH），它会自动适配底层服务管理器（systemd / OpenRC / launchd / Windows 服务），无需再记平台相关的长命令：
 
 ```bash
-systemctl status frpmgrd      # 查看状态
-journalctl -u frpmgrd -f      # 看实时日志
-systemctl restart frpmgrd     # 重启
-systemctl stop frpmgrd        # 停止
+fms start        # 启动服务
+fms stop         # 停止服务
+fms restart      # 重启服务
+fms status       # 查看运行状态
+fms logs -f      # 查看实时日志
+fms enable       # 设置开机自启
+fms disable      # 取消开机自启
+fms url          # 显示访问地址与 API 令牌（忘了令牌时很有用）
+fms config       # 查看配置（fms config edit 用编辑器打开）
+fms update       # 更新到最新版（保留端口/令牌/数据）
+fms uninstall    # 卸载
+fms help         # 查看全部命令
 ```
 
-**macOS（launchd）：**
-
-```bash
-sudo launchctl list | grep frpmgrd   # 查看状态
-tail -f /var/log/frpmgrd.log         # 看日志
-```
+> Windows 同样提供 `fms`（在 PowerShell 或 cmd 中执行；安装目录已加入系统 PATH，新开终端生效）。
+>
+> 仍想用原生命令也行：systemd 用 `systemctl status frpmgrd` / `journalctl -u frpmgrd -f`；macOS 用 `sudo launchctl list | grep frpmgrd`；Windows 用 `services.msc`。
 
 ---
 
@@ -224,7 +229,7 @@ tail -f /var/log/frpmgrd.log         # 看日志
 - **Linux**：`/etc/frpmgrd/frpmgrd.env`（数据目录 `/var/lib/frpmgrd`）
 - **macOS**：配置写在 launchd plist 里（数据目录 `/usr/local/var/frpmgrd`）
 
-改完配置后 `systemctl restart frpmgrd` 生效。可用的环境变量：
+改完配置后执行 `fms restart` 生效（等价于 `systemctl restart frpmgrd`）。可用的环境变量：
 
 | 变量 | 必填 | 默认 | 说明 |
 |---|---|:---:|---|
@@ -255,7 +260,7 @@ tail -f /var/log/frpmgrd.log         # 看日志
 - **服务起不来 / 端口被占用？** 换个端口：改 `FRPMGR_HTTP_ADDR=:新端口` 后重启服务；或重装时用 `-p` 指定。
 - **隧道显示已启动但连不上 frps？** 多半是 frps 地址/端口/令牌不对。在 Web 界面看该隧道的实时日志排查。
 - **公网访问不了后台？** 检查服务器防火墙/安全组是否放行了你设置的端口。
-- **想换成开机不自启？** `systemctl disable frpmgrd`（macOS：卸载对应 launchd plist）。
+- **想换成开机不自启？** 直接 `fms disable` 即可（跨平台通用）。
 
 更详细的部署与 API 说明见 **[`docs/README-server.md`](docs/README-server.md)**。
 

@@ -517,6 +517,226 @@ setup_service() {
 }
 
 # ----------------------------------------------------------------------------
+# 生成统一管理命令 fms (封装 服务管理 / 更新 / 卸载 / 信息查看)
+#   安装到 ${INSTALL_DIR}/fms (该目录已在 PATH 上, 全局可直接调用 fms <命令>)
+# ----------------------------------------------------------------------------
+install_cli() {
+    _cli="${INSTALL_DIR}/fms"
+    info "安装管理命令: ${_cli}"
+    # TMP_DIR 正常已由下载阶段创建; 兜底再建一次
+    [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ] || TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t frpmgr)"
+    _tmp_cli="${TMP_DIR}/fms"
+
+    # 头部: 注入安装期常量 (此 heredoc 不加引号, 变量会被展开并固化进脚本)
+    cat > "$_tmp_cli" <<EOF
+#!/bin/sh
+# =============================================================================
+# fms — frpmgrd 管理命令 (由 install.sh 自动生成, 请勿手动编辑)
+#   用法: fms <命令> [参数]   (fms help 查看全部命令)
+# =============================================================================
+REPO="${REPO}"
+BIN_NAME="${BIN_NAME}"
+INSTALL_DIR="${INSTALL_DIR}"
+SERVICE_NAME="${SERVICE_NAME}"
+ENV_FILE="${ENV_FILE}"
+DATA_DIR="${DATA_DIR}"
+RAW_URL="https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
+EOF
+
+    # 主体: 运行期逻辑 (单引号 heredoc, 保持 \$ 变量与转义原样写入)
+    cat >> "$_tmp_cli" <<'FMS_EOF'
+set -eu
+
+if [ -t 1 ]; then
+    C_RED='\033[0;31m'; C_GRN='\033[0;32m'; C_YLW='\033[0;33m'
+    C_BLU='\033[0;34m'; C_BOLD='\033[1m'; C_RST='\033[0m'
+else
+    C_RED=''; C_GRN=''; C_YLW=''; C_BLU=''; C_BOLD=''; C_RST=''
+fi
+info()  { printf "%b\n" "${C_BLU}[*]${C_RST} $*"; }
+ok()    { printf "%b\n" "${C_GRN}[+]${C_RST} $*"; }
+warn()  { printf "%b\n" "${C_YLW}[!]${C_RST} $*"; }
+err()   { printf "%b\n" "${C_RED}[x]${C_RST} $*" >&2; }
+die()   { err "$*"; exit 1; }
+
+# 非 root 时通过 sudo 执行特权操作
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+fi
+priv() { $SUDO "$@"; }
+
+PLIST="/Library/LaunchDaemons/com.miaclark.${SERVICE_NAME}.plist"
+
+# 允许用镜像源覆盖 install.sh 下载地址 (适配国内网络): FRPMGR_INSTALL_URL=https://镜像/install.sh
+if [ -n "${FRPMGR_INSTALL_URL:-}" ]; then RAW_URL="$FRPMGR_INSTALL_URL"; fi
+
+# 运行期探测 init 系统 (与安装时解耦, 迁移/换系统也能用)
+detect_init() {
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then echo "launchd"; return; fi
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then echo "systemd"; return; fi
+    if command -v rc-service >/dev/null 2>&1; then echo "openrc"; return; fi
+    echo "none"
+}
+
+# 下载到标准输出 (curl 优先, 回退 wget)
+fetch() {
+    if command -v curl >/dev/null 2>&1; then curl -fsSL "$1"
+    elif command -v wget >/dev/null 2>&1; then wget -qO- "$1"
+    else die "未找到 curl 或 wget, 无法联网执行该命令"; fi
+}
+
+# 从配置文件读取某个 KEY 的值 (无则空)
+env_get() {
+    [ -f "$ENV_FILE" ] || return 0
+    grep "^$1=" "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2-
+}
+
+cmd_start() {
+    case "$(detect_init)" in
+        systemd) priv systemctl start "$SERVICE_NAME"; ok "服务已启动" ;;
+        openrc)  priv rc-service "$SERVICE_NAME" start; ok "服务已启动" ;;
+        launchd) priv launchctl load -w "$PLIST"; ok "服务已启动" ;;
+        *)       die "未识别到服务管理器, 无法操作" ;;
+    esac
+}
+cmd_stop() {
+    case "$(detect_init)" in
+        systemd) priv systemctl stop "$SERVICE_NAME"; ok "服务已停止" ;;
+        openrc)  priv rc-service "$SERVICE_NAME" stop; ok "服务已停止" ;;
+        launchd) priv launchctl unload "$PLIST"; ok "服务已停止" ;;
+        *)       die "未识别到服务管理器, 无法操作" ;;
+    esac
+}
+cmd_restart() {
+    case "$(detect_init)" in
+        systemd) priv systemctl restart "$SERVICE_NAME"; ok "服务已重启" ;;
+        openrc)  priv rc-service "$SERVICE_NAME" restart; ok "服务已重启" ;;
+        launchd) priv launchctl unload "$PLIST" >/dev/null 2>&1 || true
+                 priv launchctl load -w "$PLIST"; ok "服务已重启" ;;
+        *)       die "未识别到服务管理器, 无法操作" ;;
+    esac
+}
+cmd_status() {
+    case "$(detect_init)" in
+        systemd) priv systemctl status "$SERVICE_NAME" --no-pager ;;
+        openrc)  priv rc-service "$SERVICE_NAME" status ;;
+        launchd) priv launchctl list 2>/dev/null | grep "$SERVICE_NAME" || echo "服务未在运行" ;;
+        *)       die "未识别到服务管理器, 无法操作" ;;
+    esac
+}
+cmd_enable() {
+    case "$(detect_init)" in
+        systemd) priv systemctl enable "$SERVICE_NAME"; ok "已设置开机自启" ;;
+        openrc)  priv rc-update add "$SERVICE_NAME" default; ok "已设置开机自启" ;;
+        launchd) priv launchctl load -w "$PLIST"; ok "已设置开机自启" ;;
+        *)       die "未识别到服务管理器, 无法操作" ;;
+    esac
+}
+cmd_disable() {
+    case "$(detect_init)" in
+        systemd) priv systemctl disable "$SERVICE_NAME"; ok "已取消开机自启" ;;
+        openrc)  priv rc-update del "$SERVICE_NAME" default; ok "已取消开机自启" ;;
+        launchd) priv launchctl unload -w "$PLIST"; ok "已取消开机自启" ;;
+        *)       die "未识别到服务管理器, 无法操作" ;;
+    esac
+}
+cmd_logs() {
+    _follow=""
+    case "${1:-}" in -f|--follow|follow) _follow=1 ;; esac
+    case "$(detect_init)" in
+        systemd)
+            if [ -n "$_follow" ]; then priv journalctl -u "$SERVICE_NAME" -f
+            else priv journalctl -u "$SERVICE_NAME" -n 200 --no-pager; fi
+            ;;
+        *)
+            _log="/var/log/${SERVICE_NAME}.log"
+            [ -f "$_log" ] || die "未找到日志文件: $_log"
+            if [ -n "$_follow" ]; then priv tail -f "$_log"
+            else priv tail -n 200 "$_log"; fi
+            ;;
+    esac
+}
+cmd_url() {
+    _addr="$(env_get FRPMGR_HTTP_ADDR)"
+    _token="$(env_get FRPMGR_API_TOKEN)"
+    _port="${_addr#:}"
+    [ -n "$_port" ] || _port="8080"
+    printf "%b\n" "${C_BOLD}frpmgrd 访问信息${C_RST}"
+    printf "  访问地址 : ${C_BOLD}http://127.0.0.1:%s${C_RST}\n" "$_port"
+    printf "  API 文档 : http://127.0.0.1:%s/api/docs\n" "$_port"
+    printf "  API 令牌 : ${C_BOLD}%s${C_RST}\n" "${_token:-(未读取到)}"
+    printf "  配置文件 : %s\n" "$ENV_FILE"
+}
+cmd_config() {
+    [ -f "$ENV_FILE" ] || die "配置文件不存在: $ENV_FILE"
+    case "${1:-show}" in
+        edit)
+            priv "${EDITOR:-vi}" "$ENV_FILE"
+            warn "如修改了配置, 请执行 fms restart 使其生效"
+            ;;
+        *)  priv cat "$ENV_FILE" ;;
+    esac
+}
+cmd_version()   { "${INSTALL_DIR}/${BIN_NAME}" version; }
+cmd_update()    { fetch "$RAW_URL" | sh -s -- --update "$@"; }
+cmd_install()   { fetch "$RAW_URL" | sh -s -- "$@"; }
+cmd_uninstall() {
+    fetch "$RAW_URL" | sh -s -- --uninstall
+    priv rm -f "${INSTALL_DIR}/fms" 2>/dev/null || true
+}
+
+usage() {
+    printf "%b\n" "${C_BOLD}fms — frpmgrd 管理命令${C_RST}
+
+用法: fms <命令> [参数]
+
+服务管理:
+  start            启动服务
+  stop             停止服务
+  restart          重启服务
+  status           查看运行状态
+  logs [-f]        查看日志 (加 -f 实时跟踪)
+  enable           设置开机自启
+  disable          取消开机自启
+
+信息查看:
+  url              显示访问地址与 API 令牌
+  config [edit]    查看 (或 edit 编辑) 配置文件
+  version          显示版本信息
+
+安装维护:
+  install [参数]   重新安装 (参数透传给 install.sh)
+  update [参数]    更新到最新版 (保留端口/令牌/数据)
+  uninstall        卸载
+
+  help             显示本帮助"
+}
+
+case "${1:-help}" in
+    start)      shift; cmd_start "$@" ;;
+    stop)       shift; cmd_stop "$@" ;;
+    restart)    shift; cmd_restart "$@" ;;
+    status)     shift; cmd_status "$@" ;;
+    logs)       shift; cmd_logs "$@" ;;
+    enable)     shift; cmd_enable "$@" ;;
+    disable)    shift; cmd_disable "$@" ;;
+    url)        shift; cmd_url "$@" ;;
+    config)     shift; cmd_config "$@" ;;
+    version|-v|--version) shift; cmd_version "$@" ;;
+    update)     shift; cmd_update "$@" ;;
+    install)    shift; cmd_install "$@" ;;
+    uninstall)  shift; cmd_uninstall "$@" ;;
+    help|-h|--help) usage ;;
+    *)          err "未知命令: ${1}"; echo; usage; exit 2 ;;
+esac
+FMS_EOF
+
+    priv install -m 0755 "$_tmp_cli" "$_cli"
+    ok "管理命令已安装, 现在可直接使用: ${C_BOLD}fms <命令>${C_RST}"
+}
+
+# ----------------------------------------------------------------------------
 # 读取已安装二进制的版本号 (如 1.2.10), 未安装则为空
 # ----------------------------------------------------------------------------
 get_installed_version() {
@@ -611,6 +831,7 @@ do_install() {
     download_and_install
     write_env_file
     setup_service
+    install_cli
     health_check
     print_summary
 }
@@ -625,23 +846,16 @@ print_summary() {
     printf "  配置文件 : %s\n" "$ENV_FILE"
     printf "  数据目录 : %s\n" "$DATA_DIR"
     printf "%b\n" "────────────────────────────────────────────"
-    case "$(detect_init_system)" in
-        systemd)
-            printf "  状态: %b\n" "${C_BOLD}systemctl status ${SERVICE_NAME}${C_RST}"
-            printf "  日志: %b\n" "${C_BOLD}journalctl -u ${SERVICE_NAME} -f${C_RST}"
-            printf "  停止: %b\n" "${C_BOLD}systemctl stop ${SERVICE_NAME}${C_RST}"
-            ;;
-        openrc)
-            printf "  状态: %b\n" "${C_BOLD}rc-service ${SERVICE_NAME} status${C_RST}"
-            printf "  日志: %b\n" "${C_BOLD}tail -f /var/log/${SERVICE_NAME}.log${C_RST}"
-            ;;
-        launchd)
-            printf "  状态: %b\n" "${C_BOLD}sudo launchctl list | grep ${SERVICE_NAME}${C_RST}"
-            printf "  日志: %b\n" "${C_BOLD}tail -f /var/log/${SERVICE_NAME}.log${C_RST}"
-            ;;
-    esac
-    printf "  更新: %b\n" "${C_BOLD}sh install.sh --update${C_RST}"
-    printf "  卸载: %b\n" "${C_BOLD}sh install.sh --uninstall${C_RST}"
+    printf "%b\n" "  ${C_BOLD}管理命令 (已安装到 PATH, 任意目录可用):${C_RST}"
+    printf "    %b   # 启动服务\n"        "${C_BOLD}fms start${C_RST}"
+    printf "    %b    # 停止服务\n"       "${C_BOLD}fms stop${C_RST}"
+    printf "    %b # 重启服务\n"          "${C_BOLD}fms restart${C_RST}"
+    printf "    %b  # 查看状态\n"         "${C_BOLD}fms status${C_RST}"
+    printf "    %b # 实时日志\n"          "${C_BOLD}fms logs -f${C_RST}"
+    printf "    %b     # 查看地址与令牌\n" "${C_BOLD}fms url${C_RST}"
+    printf "    %b  # 更新到最新版\n"      "${C_BOLD}fms update${C_RST}"
+    printf "    %b # 卸载\n"              "${C_BOLD}fms uninstall${C_RST}"
+    printf "    %b    # 查看全部命令\n"    "${C_BOLD}fms help${C_RST}"
     printf "%b\n" "────────────────────────────────────────────"
     warn "请妥善保存 API 令牌, 它是访问后台的唯一凭证!"
 }
@@ -673,6 +887,7 @@ do_update() {
 
     info "准备更新: ${C_BOLD}${_cur:-?}${C_RST} -> ${C_BOLD}${_target}${C_RST}"
     download_and_install            # 下载并覆盖二进制 (不动配置)
+    install_cli                     # 顺带刷新管理命令 fms 到最新
     restart_service                 # 重启以加载新二进制
 
     # 尽力做一次健康检查 (端口取自现有配置)
@@ -721,6 +936,9 @@ do_uninstall() {
 
     priv rm -f "${INSTALL_DIR}/${BIN_NAME}"
     ok "已删除二进制 ${INSTALL_DIR}/${BIN_NAME}"
+
+    priv rm -f "${INSTALL_DIR}/fms"
+    ok "已删除管理命令 ${INSTALL_DIR}/fms"
 
     prompt "是否同时删除配置文件与数据目录 (${DATA_DIR})? [y/N]" "N"
     case "$REPLY" in
