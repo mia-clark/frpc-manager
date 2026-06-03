@@ -464,19 +464,55 @@ function Do-Logs {
     foreach ($r in $Rest) { if ($r -in @('-f', '--follow', 'follow')) { $follow = $true } }
     if ($follow) { Get-Content -Path $LogFile -Tail 200 -Wait } else { Get-Content -Path $LogFile -Tail 200 }
 }
-function Do-Url {
-    $port = '8080'; $token = '(未读取到)'
+function Write-CliPanel {
+    Write-Host '────────────────────────────────────────────'
+    Write-Host '  管理命令 (已加入 PATH, 新开终端任意目录可用):'
+    $rows = @(
+        @('fms start',     '启动服务'),
+        @('fms stop',      '停止服务'),
+        @('fms restart',   '重启服务'),
+        @('fms status',    '查看状态'),
+        @('fms logs -f',   '实时日志'),
+        @('fms info',      '查看完整信息'),
+        @('fms config',    '查看/编辑配置'),
+        @('fms update',    '更新到最新版'),
+        @('fms uninstall', '卸载'),
+        @('fms help',      '查看全部命令')
+    )
+    foreach ($r in $rows) { Write-Host ('    {0,-13} # {1}' -f $r[0], $r[1]) }
+    Write-Host '────────────────────────────────────────────'
+}
+function Do-Info {
+    $port = '8080'; $token = '(未读取到)'; $ddir = $DataDir; $loglv = 'info'
     if (Use-Nssm) {
         $raw = & $NssmPath get $ServiceName AppEnvironmentExtra 2>$null
         foreach ($line in $raw) {
             if     ($line -match '^FRPMGR_HTTP_ADDR=(.*)$') { $port  = $Matches[1].TrimStart(':') }
             elseif ($line -match '^FRPMGR_API_TOKEN=(.*)$') { $token = $Matches[1] }
+            elseif ($line -match '^FRPMGR_DATA_DIR=(.*)$')  { $ddir  = $Matches[1] }
+            elseif ($line -match '^FRPMGR_LOG_LEVEL=(.*)$') { $loglv = $Matches[1] }
         }
     }
-    Write-Host 'frpmgrd 访问信息'
+    $ver = '未知'
+    if (Test-Path $BinPath) { $ver = ((& $BinPath version 2>$null) -join ' ') }
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    $state = if ($svc) { "$($svc.Status)" } else { '未安装' }
+    Write-Host 'frpmgrd 运行信息'
+    Write-Host '────────────────────────────────────────────'
+    Write-Host ("  版本     : {0}" -f $ver)
+    Write-Host ("  服务状态 : {0}" -f $state)
     Write-Host ("  访问地址 : http://127.0.0.1:{0}" -f $port)
     Write-Host ("  API 文档 : http://127.0.0.1:{0}/api/docs" -f $port)
     Write-Host ("  API 令牌 : {0}" -f $token)
+    Write-Host ("  监听地址 : :{0}" -f $port)
+    Write-Host ("  日志级别 : {0}" -f $loglv)
+    Write-Host ("  程序路径 : {0}" -f $BinPath)
+    Write-Host ("  管理命令 : {0}" -f (Join-Path $InstallDir 'fms.cmd'))
+    Write-Host ("  服务管理 : {0}" -f $NssmPath)
+    Write-Host ("  数据目录 : {0}" -f $ddir)
+    Write-Host ("  日志文件 : {0}" -f $LogFile)
+    Write-Host ("  服务名称 : {0}  (services.msc)" -f $ServiceName)
+    Write-CliPanel
 }
 function Do-Config {
     if (-not (Use-Nssm)) { Write-Host '[x] 未找到 nssm.exe, 无法读取服务配置' -ForegroundColor Red; exit 1 }
@@ -508,7 +544,7 @@ fms — frpmgrd 管理命令
   disable          取消开机自启
 
 信息查看:
-  url              显示访问地址与 API 令牌
+  info             显示完整运行信息 (地址/令牌/路径/状态) + 命令面板
   config [edit]    查看 (或 edit 用 NSSM 图形界面编辑) 服务配置
   version          显示版本信息
 
@@ -535,7 +571,7 @@ switch ($Cmd.ToLower()) {
     'logs'      { Do-Logs }
     'enable'    { Do-Enable }
     'disable'   { Do-Disable }
-    'url'       { Do-Url }
+    'info'      { Do-Info; exit 0 }
     'config'    { Do-Config }
     'version'   { Do-Version }
     'update'    { Invoke-Installer (@('-Update') + $Rest) }
@@ -647,7 +683,8 @@ function Write-CliHint {
         @('fms restart',   '重启服务'),
         @('fms status',    '查看状态'),
         @('fms logs -f',   '实时日志'),
-        @('fms url',       '查看地址与令牌'),
+        @('fms info',      '查看完整信息'),
+        @('fms config',    '查看/编辑配置'),
         @('fms update',    '更新到最新版'),
         @('fms uninstall', '卸载'),
         @('fms help',      '查看全部命令')

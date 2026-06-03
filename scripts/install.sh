@@ -684,16 +684,56 @@ cmd_logs() {
             ;;
     esac
 }
-cmd_url() {
-    _addr="$(env_get FRPMGR_HTTP_ADDR)"
+# 管理命令面板 (info 命令底部展示)
+cli_panel() {
+    printf "%b\n" "────────────────────────────────────────────"
+    printf "%b\n" "  ${C_BOLD}管理命令 (已安装到 PATH, 任意目录可用):${C_RST}"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms start"     "启动服务"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms stop"      "停止服务"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms restart"   "重启服务"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms status"    "查看状态"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms logs -f"   "实时日志"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms info"      "查看完整信息"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms config"    "查看/编辑配置"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms update"    "更新到最新版"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms uninstall" "卸载"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms help"      "查看全部命令"
+    printf "%b\n" "────────────────────────────────────────────"
+}
+cmd_info() {
+    _addr="$(env_get FRPMGR_HTTP_ADDR)"; _port="${_addr#:}"; [ -n "$_port" ] || _port="8080"
     _token="$(env_get FRPMGR_API_TOKEN)"
-    _port="${_addr#:}"
-    [ -n "$_port" ] || _port="8080"
-    printf "%b\n" "${C_BOLD}frpmgrd 访问信息${C_RST}"
+    _ddir="$(env_get FRPMGR_DATA_DIR)";  [ -n "$_ddir" ] || _ddir="$DATA_DIR"
+    _loglv="$(env_get FRPMGR_LOG_LEVEL)"; [ -n "$_loglv" ] || _loglv="info"
+    _ver="$("${INSTALL_DIR}/${BIN_NAME}" version 2>/dev/null || echo 未知)"
+    case "$(detect_init)" in
+        systemd) _svc="/etc/systemd/system/${SERVICE_NAME}.service"
+                 _state="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"; [ -n "$_state" ] || _state="unknown"
+                 _logc="journalctl -u ${SERVICE_NAME} -f" ;;
+        openrc)  _svc="/etc/init.d/${SERVICE_NAME}"
+                 if rc-service "$SERVICE_NAME" status >/dev/null 2>&1; then _state="active"; else _state="stopped"; fi
+                 _logc="tail -f /var/log/${SERVICE_NAME}.log" ;;
+        launchd) _svc="$PLIST"
+                 if launchctl list 2>/dev/null | grep -q "$SERVICE_NAME"; then _state="active"; else _state="stopped"; fi
+                 _logc="tail -f /var/log/${SERVICE_NAME}.log" ;;
+        *)       _svc="(未注册)"; _state="unknown"; _logc="(无)" ;;
+    esac
+    printf "%b\n" "${C_BOLD}frpmgrd 运行信息${C_RST}"
+    printf "%b\n" "────────────────────────────────────────────"
+    printf "  版本     : %s\n" "$_ver"
+    printf "  服务状态 : %s\n" "$_state"
     printf "  访问地址 : ${C_BOLD}http://127.0.0.1:%s${C_RST}\n" "$_port"
     printf "  API 文档 : http://127.0.0.1:%s/api/docs\n" "$_port"
     printf "  API 令牌 : ${C_BOLD}%s${C_RST}\n" "${_token:-(未读取到)}"
+    printf "  监听地址 : %s\n" "${_addr:-:8080}"
+    printf "  日志级别 : %s\n" "$_loglv"
+    printf "  程序路径 : %s\n" "${INSTALL_DIR}/${BIN_NAME}"
+    printf "  管理命令 : %s\n" "${INSTALL_DIR}/fms"
     printf "  配置文件 : %s\n" "$ENV_FILE"
+    printf "  数据目录 : %s\n" "$_ddir"
+    printf "  服务文件 : %s\n" "$_svc"
+    printf "  日志查看 : %s\n" "$_logc"
+    cli_panel
 }
 cmd_config() {
     [ -f "$ENV_FILE" ] || die "配置文件不存在: $ENV_FILE"
@@ -728,7 +768,7 @@ usage() {
   disable          取消开机自启
 
 信息查看:
-  url              显示访问地址与 API 令牌
+  info             显示完整运行信息 (地址/令牌/路径/状态) + 命令面板
   config [edit]    查看 (或 edit 编辑) 配置文件
   version          显示版本信息
 
@@ -755,7 +795,7 @@ case "${1:-help}" in
     logs)       shift; cmd_logs "$@" ;;
     enable)     shift; cmd_enable "$@" ;;
     disable)    shift; cmd_disable "$@" ;;
-    url)        shift; cmd_url "$@" ;;
+    info)       shift; cmd_info "$@"; exit 0 ;;
     config)     shift; cmd_config "$@" ;;
     version|-v|--version) shift; cmd_version "$@" ;;
     update)     shift; cmd_update "$@" ;;
@@ -884,7 +924,8 @@ print_cli_hint() {
     printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms restart"   "重启服务"
     printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms status"    "查看状态"
     printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms logs -f"   "实时日志"
-    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms url"       "查看地址与令牌"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms info"      "查看完整信息"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms config"    "查看/编辑配置"
     printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms update"    "更新到最新版"
     printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms uninstall" "卸载"
     printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms help"      "查看全部命令"
