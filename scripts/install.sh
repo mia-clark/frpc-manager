@@ -740,11 +740,18 @@ usage() {
   help             显示本帮助"
 }
 
+# 子命令收尾的一行轻提示, 引导查看完整命令清单
+cli_tip() {
+    printf "%b\n" "────────────────────────────────────────────"
+    printf "%b\n" "${C_BOLD}💡 输入 fms 查看全部命令${C_RST}"
+    printf "%b\n" "────────────────────────────────────────────"
+}
+
 case "${1:-help}" in
     start)      shift; cmd_start "$@" ;;
     stop)       shift; cmd_stop "$@" ;;
     restart)    shift; cmd_restart "$@" ;;
-    status)     shift; cmd_status "$@" ;;
+    status)     shift; cmd_status "$@" || true ;;
     logs)       shift; cmd_logs "$@" ;;
     enable)     shift; cmd_enable "$@" ;;
     disable)    shift; cmd_disable "$@" ;;
@@ -753,10 +760,14 @@ case "${1:-help}" in
     version|-v|--version) shift; cmd_version "$@" ;;
     update)     shift; cmd_update "$@" ;;
     install)    shift; cmd_install "$@" ;;
-    uninstall)  shift; cmd_uninstall "$@" ;;
-    help|-h|--help) usage ;;
+    uninstall)  shift; cmd_uninstall "$@"; exit 0 ;;
+    help|-h|--help) usage; exit 0 ;;
     *)          err "未知命令: ${1}"; echo; usage; exit 2 ;;
 esac
+
+# 任意子命令执行完都补一行轻提示; help/uninstall 已提前 exit,
+# logs -f 阻塞跟踪不会走到这里, 因此都不会触发
+cli_tip
 FMS_EOF
 
     priv install -m 0755 "$_tmp_cli" "$_cli"
@@ -863,6 +874,23 @@ do_install() {
     print_summary
 }
 
+# 打印 fms 管理命令清单 (安装 / 更新结尾共用, 方便用户直接照着敲)
+print_cli_hint() {
+    printf "%b\n" "────────────────────────────────────────────"
+    printf "%b\n" "  ${C_BOLD}管理命令 (已安装到 PATH, 任意目录可用):${C_RST}"
+    # %-13s 让命令列定宽左对齐 (最长 fms uninstall = 13)，颜色码只在格式串里、不参与宽度计算，# 自然对齐
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms start"     "启动服务"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms stop"      "停止服务"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms restart"   "重启服务"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms status"    "查看状态"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms logs -f"   "实时日志"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms url"       "查看地址与令牌"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms update"    "更新到最新版"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms uninstall" "卸载"
+    printf "    ${C_BOLD}%-13s${C_RST} # %s\n" "fms help"      "查看全部命令"
+    printf "%b\n" "────────────────────────────────────────────"
+}
+
 print_summary() {
     _ip="127.0.0.1"
     printf "\n%b\n" "${C_GRN}${C_BOLD}✓ 安装完成!${C_RST}"
@@ -872,18 +900,7 @@ print_summary() {
     printf "  API 令牌 : ${C_BOLD}%s${C_RST}\n" "$TOKEN"
     printf "  配置文件 : %s\n" "$ENV_FILE"
     printf "  数据目录 : %s\n" "$DATA_DIR"
-    printf "%b\n" "────────────────────────────────────────────"
-    printf "%b\n" "  ${C_BOLD}管理命令 (已安装到 PATH, 任意目录可用):${C_RST}"
-    printf "    %b   # 启动服务\n"        "${C_BOLD}fms start${C_RST}"
-    printf "    %b    # 停止服务\n"       "${C_BOLD}fms stop${C_RST}"
-    printf "    %b # 重启服务\n"          "${C_BOLD}fms restart${C_RST}"
-    printf "    %b  # 查看状态\n"         "${C_BOLD}fms status${C_RST}"
-    printf "    %b # 实时日志\n"          "${C_BOLD}fms logs -f${C_RST}"
-    printf "    %b     # 查看地址与令牌\n" "${C_BOLD}fms url${C_RST}"
-    printf "    %b  # 更新到最新版\n"      "${C_BOLD}fms update${C_RST}"
-    printf "    %b # 卸载\n"              "${C_BOLD}fms uninstall${C_RST}"
-    printf "    %b    # 查看全部命令\n"    "${C_BOLD}fms help${C_RST}"
-    printf "%b\n" "────────────────────────────────────────────"
+    print_cli_hint
     warn "请妥善保存 API 令牌, 它是访问后台的唯一凭证!"
 }
 
@@ -928,6 +945,7 @@ do_update() {
     printf "\n%b\n" "${C_GRN}${C_BOLD}✓ 更新完成!${C_RST} 版本: ${_target}"
     [ -n "$PORT" ] && printf "  访问地址 : http://127.0.0.1:%s\n" "$PORT"
     info "现有端口、API 令牌与数据均未改动。"
+    print_cli_hint
 }
 
 # ----------------------------------------------------------------------------

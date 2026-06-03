@@ -521,6 +521,12 @@ fms — frpmgrd 管理命令
 "@
 }
 
+function Write-CliTip {
+    Write-Host '────────────────────────────────────────────'
+    Write-Host '💡 输入 fms 查看全部命令'
+    Write-Host '────────────────────────────────────────────'
+}
+
 switch ($Cmd.ToLower()) {
     'start'     { Do-Start }
     'stop'      { Do-Stop }
@@ -537,12 +543,16 @@ switch ($Cmd.ToLower()) {
     'uninstall' {
         Invoke-Installer @('-Uninstall')
         Remove-Item -Force (Join-Path $InstallDir 'fms.cmd'), (Join-Path $InstallDir 'fms.ps1') -ErrorAction SilentlyContinue
+        exit 0
     }
     default {
         Show-Usage
-        if ($Cmd.ToLower() -notin @('help', '-h', '--help', '-help')) { exit 2 }
+        if ($Cmd.ToLower() -in @('help', '-h', '--help', '-help')) { exit 0 } else { exit 2 }
     }
 }
+
+# 任意子命令执行完都补一行轻提示; help/uninstall 已 exit, logs -f 阻塞不会到这里
+Write-CliTip
 '@
 
     # fms.ps1 含中文, 必须带 UTF-8 BOM, 否则 PowerShell 5.1 按 ANSI 解析会乱码/语法错
@@ -626,6 +636,26 @@ function Invoke-Install {
     Write-Summary
 }
 
+# 打印 fms 管理命令清单 (安装 / 更新结尾共用, 方便用户直接照着敲)
+function Write-CliHint {
+    Write-Host '────────────────────────────────────────────'
+    Write-Host '  管理命令 (已加入 PATH, 新开终端任意目录可用):'
+    # {0,-13} 定宽左对齐命令列 (最长 fms uninstall = 13)，# 自然对齐
+    $rows = @(
+        @('fms start',     '启动服务'),
+        @('fms stop',      '停止服务'),
+        @('fms restart',   '重启服务'),
+        @('fms status',    '查看状态'),
+        @('fms logs -f',   '实时日志'),
+        @('fms url',       '查看地址与令牌'),
+        @('fms update',    '更新到最新版'),
+        @('fms uninstall', '卸载'),
+        @('fms help',      '查看全部命令')
+    )
+    foreach ($r in $rows) { Write-Host ('    {0,-13} # {1}' -f $r[0], $r[1]) }
+    Write-Host '────────────────────────────────────────────'
+}
+
 function Write-Summary {
     $ip = '127.0.0.1'
     Write-Host ''
@@ -637,18 +667,7 @@ function Write-Summary {
     Write-Host ("  安装目录 : {0}" -f $InstallDir)
     Write-Host ("  数据目录 : {0}" -f $DataDir)
     Write-Host ("  日志目录 : {0}" -f $LogDir)
-    Write-Host '────────────────────────────────────────────'
-    Write-Host '  管理命令 (已加入 PATH, 新开终端任意目录可用):'
-    Write-Host '    fms start       # 启动服务'
-    Write-Host '    fms stop        # 停止服务'
-    Write-Host '    fms restart     # 重启服务'
-    Write-Host '    fms status      # 查看状态'
-    Write-Host '    fms logs -f     # 实时日志'
-    Write-Host '    fms url         # 查看地址与令牌'
-    Write-Host '    fms update      # 更新到最新版'
-    Write-Host '    fms uninstall   # 卸载'
-    Write-Host '    fms help        # 查看全部命令'
-    Write-Host '────────────────────────────────────────────'
+    Write-CliHint
     Write-Warn '请妥善保存 API 令牌, 它是访问后台的唯一凭证!'
 }
 
@@ -693,6 +712,7 @@ function Invoke-Update {
     Write-Host "✓ 更新完成! 版本: $target" -ForegroundColor Green
     if ($script:Port) { Write-Host ("  访问地址 : http://127.0.0.1:{0}" -f $script:Port) }
     Write-Info '现有端口、API 令牌与数据均未改动。'
+    Write-CliHint
 }
 
 # ----------------------------------------------------------------------------
