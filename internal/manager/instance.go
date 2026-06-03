@@ -323,7 +323,10 @@ func (i *instance) runLoop(ctx context.Context, svc *services.FrpClientService) 
 	}()
 	doneCh := make(chan struct{})
 	go func() {
-		svc.Run()
+		// runCtx is derived from start()'s context.WithCancel(parent). For now
+		// we pass it straight through. Task 3 will wrap it with xlog.NewContext
+		// to inject the instance prefix.
+		svc.Run(ctx)
 		close(doneCh)
 	}()
 	select {
