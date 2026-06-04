@@ -31,12 +31,19 @@ func NewLogsHandler(m *manager.Manager, logsDir string, log *slog.Logger, origin
 	return &LogsHandler{m: m, logsDir: logsDir, log: log, origins: origins}
 }
 
-func (h *LogsHandler) logPath(id string) string {
-	return filepath.Join(h.logsDir, id+".log")
+// logCombinedPath 返回合并日志的绝对路径；所有 frpc 实例共写这一个文件。
+func (h *LogsHandler) logCombinedPath() string {
+	return filepath.Join(h.logsDir, manager.CombinedLogFileName)
 }
 
-// Query returns the last `lines` lines (default 200), or a slice starting
-// at `offset` for paging through long logs.
+// instancePrefix 用于在合并日志中匹配单个实例的行。
+func instancePrefix(id string) string {
+	return "[inst=" + id + "]"
+}
+
+// Query returns the last `lines` lines (default 200) from the combined log
+// that belong to this instance (matched by [inst=<id>] prefix) and are not
+// older than the instance's LogViewSince watermark.
 func (h *LogsHandler) Query(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if !h.m.Exists(id) {
@@ -44,27 +51,41 @@ func (h *LogsHandler) Query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lines := atoiDefault(r.URL.Query().Get("lines"), 200)
-	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
-	path := h.logPath(id)
-	got, _, next, err := util.ReadFileLines(path, offset, lines)
+	prefix := instancePrefix(id)
+	since := h.m.LogViewSince(id)
+
+	got, err := util.ReadFileLinesFiltered(h.logCombinedPath(), lines, func(line string) bool {
+		if !strings.Contains(line, prefix) {
+			return false
+		}
+		if since == 0 {
+			return true
+		}
+		ts, ok := parseLogLineTimestamp(line)
+		if !ok {
+			return true // 解析失败的行保留，避免误删
+		}
+		return ts >= since
+	})
 	if err != nil {
-		WriteJSON(w, http.StatusOK, map[string]any{"lines": []string{}, "next_offset": offset})
+		WriteJSON(w, http.StatusOK, map[string]any{"lines": []string{}, "next_offset": int64(0)})
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"lines":       trimLines(got),
-		"next_offset": next,
+		"next_offset": int64(0), // 合并日志模式不再支持 offset 翻页；前端只用 lines
 	})
 }
 
 // Files lists rotated log files for this config.
+// TODO(Task 9): 合并日志模式下，列出合并文件的轮转历史；当前临时指向合并日志路径。
 func (h *LogsHandler) Files(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if !h.m.Exists(id) {
 		WriteError(w, http.StatusNotFound, CodeConfigNotFound, "config not found", nil)
 		return
 	}
-	files, dates, err := util.FindLogFiles(h.logPath(id))
+	files, dates, err := util.FindLogFiles(h.logCombinedPath())
 	if err != nil {
 		WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
 		return
@@ -80,20 +101,26 @@ func (h *LogsHandler) Files(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// Clear removes the current and rotated log files for this config.
+// Clear removes the log view watermark for this instance so future queries
+// start from the current time.
+// TODO(Task 9): 实现按实例 LogViewSince 水印清空，不再物理删除合并日志文件。
+// 当前临时实现：指向合并日志路径（语义上错误，Task 9 会重写）。
 func (h *LogsHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if !h.m.Exists(id) {
 		WriteError(w, http.StatusNotFound, CodeConfigNotFound, "config not found", nil)
 		return
 	}
-	if files, _, err := util.FindLogFiles(h.logPath(id)); err == nil {
+	// TODO(Task 9): 替换为 h.m.SetLogViewSince(id, time.Now().UnixMilli()) 而非删文件。
+	if files, _, err := util.FindLogFiles(h.logCombinedPath()); err == nil {
 		util.DeleteFiles(files)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // Tail upgrades to WebSocket and streams new lines as they arrive.
+// TODO(Task 8): 在合并日志模式下，对推送的每行做 [inst=<id>] 前缀过滤，
+// 当前临时实现：tail 整个合并日志（会收到所有实例的行）。
 func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if !h.m.Exists(id) {
@@ -113,7 +140,7 @@ func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	t := logtail.New(h.logPath(id))
+	t := logtail.New(h.logCombinedPath())
 	ch := t.Subscribe()
 	defer t.Stop()
 
@@ -163,4 +190,19 @@ func trimLines(in []string) []string {
 		out = append(out, strings.TrimRight(l, "\r\n"))
 	}
 	return out
+}
+
+// parseLogLineTimestamp 从 frp 日志行首解析时间戳（毫秒精度）。
+// frp 行格式："2026-06-03 15:18:20.546 [D] ..."（util.log 包默认 layout）。
+// 解析失败时 ok=false，调用方应当默认保留这一行。
+func parseLogLineTimestamp(line string) (unixMilli int64, ok bool) {
+	const layout = "2006-01-02 15:04:05.000"
+	if len(line) < len(layout) {
+		return 0, false
+	}
+	t, err := time.ParseInLocation(layout, line[:len(layout)], time.Local)
+	if err != nil {
+		return 0, false
+	}
+	return t.UnixMilli(), true
 }
