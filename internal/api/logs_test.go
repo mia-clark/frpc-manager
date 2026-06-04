@@ -200,3 +200,139 @@ func TestLogsTail_FiltersByInstancePrefix(t *testing.T) {
 	conn.Close(websocket.StatusNormalClosure, "")
 	time.Sleep(500 * time.Millisecond)
 }
+
+// TestLogsClear_SetsViewSince: DELETE /logs 应仅更新 LogViewSince，不删文件。
+// 后续 GET /logs 不再返回戳之前的行；同时 frpc.log 物理文件保留。
+func TestLogsClear_SetsViewSince(t *testing.T) {
+	tmp := t.TempDir()
+	logsDir := filepath.Join(tmp, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	combined := filepath.Join(logsDir, manager.CombinedLogFileName)
+	body := strings.Join([]string{
+		"2026-06-03 10:00:00.000 [I] [inst=A] old",
+		"2026-06-03 12:00:00.000 [I] [inst=B] old-B",
+		"",
+	}, "\n")
+	if err := os.WriteFile(combined, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newTestManager(t, tmp)
+	mustCreateInstance(t, m, "A")
+	mustCreateInstance(t, m, "B")
+	h := NewLogsHandler(m, logsDir, testLogger(), []string{"*"})
+
+	// 1. Clear A
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/configs/A/logs", nil)
+	req = withPathID(req, "A")
+	rec := httptest.NewRecorder()
+	h.Clear(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+
+	// 2. 文件仍存在
+	if _, err := os.Stat(combined); err != nil {
+		t.Fatalf("combined.log should still exist after Clear, got %v", err)
+	}
+
+	// 3. GET A 应返回空
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/configs/A/logs?lines=10", nil)
+	getReq = withPathID(getReq, "A")
+	getRec := httptest.NewRecorder()
+	h.Query(getRec, getReq)
+	var resp struct {
+		Lines []string `json:"lines"`
+	}
+	_ = json.Unmarshal(getRec.Body.Bytes(), &resp)
+	if len(resp.Lines) != 0 {
+		t.Fatalf("expected empty lines after Clear, got %v", resp.Lines)
+	}
+
+	// 4. GET B 仍能看到自己的行
+	getReq2 := httptest.NewRequest(http.MethodGet, "/api/v1/configs/B/logs?lines=10", nil)
+	getReq2 = withPathID(getReq2, "B")
+	getRec2 := httptest.NewRecorder()
+	h.Query(getRec2, getReq2)
+	var resp2 struct {
+		Lines []string `json:"lines"`
+	}
+	_ = json.Unmarshal(getRec2.Body.Bytes(), &resp2)
+	if len(resp2.Lines) != 1 {
+		t.Fatalf("expected 1 line for B, got %v", resp2.Lines)
+	}
+}
+
+// TestLogsClear_404OnUnknownID: DELETE 不存在的 instance 应返回 404，
+// 不应误把 LogViewSince 写到 meta.json。
+func TestLogsClear_404OnUnknownID(t *testing.T) {
+	tmp := t.TempDir()
+	logsDir := filepath.Join(tmp, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	m := newTestManager(t, tmp)
+	h := NewLogsHandler(m, logsDir, testLogger(), []string{"*"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/configs/nonexistent/logs", nil)
+	req = withPathID(req, "nonexistent")
+	rec := httptest.NewRecorder()
+	h.Clear(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestLogsQuery_RespectsViewSince: 设置 LogViewSince 后，
+// Query 只返回时间戳 >= since 的行。
+func TestLogsQuery_RespectsViewSince(t *testing.T) {
+	tmp := t.TempDir()
+	logsDir := filepath.Join(tmp, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	combined := filepath.Join(logsDir, manager.CombinedLogFileName)
+	body := strings.Join([]string{
+		"2026-06-03 10:00:00.000 [I] [inst=A] line-1-old",
+		"2026-06-03 12:00:00.000 [I] [inst=A] line-2-old",
+		"2026-06-03 14:00:00.000 [I] [inst=A] line-3-new",
+		"",
+	}, "\n")
+	if err := os.WriteFile(combined, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newTestManager(t, tmp)
+	mustCreateInstance(t, m, "A")
+	h := NewLogsHandler(m, logsDir, testLogger(), []string{"*"})
+
+	// Set view-since to 13:00:00 — only line-3 (14:00) should survive
+	cutoff, err := time.ParseInLocation("2006-01-02 15:04:05.000",
+		"2026-06-03 13:00:00.000", time.Local)
+	if err != nil {
+		t.Fatalf("parse cutoff: %v", err)
+	}
+	if err := m.SetLogViewSince("A", cutoff.UnixMilli()); err != nil {
+		t.Fatalf("SetLogViewSince: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs/A/logs?lines=10", nil)
+	req = withPathID(req, "A")
+	rec := httptest.NewRecorder()
+	h.Query(rec, req)
+
+	var resp struct {
+		Lines []string `json:"lines"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Lines) != 1 {
+		t.Fatalf("expected 1 line after view-since, got %d: %v", len(resp.Lines), resp.Lines)
+	}
+	if !strings.Contains(resp.Lines[0], "line-3-new") {
+		t.Fatalf("expected line-3-new, got %q", resp.Lines[0])
+	}
+}

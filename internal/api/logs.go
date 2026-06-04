@@ -77,8 +77,8 @@ func (h *LogsHandler) Query(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Files lists rotated log files for this config.
-// TODO(Task 9): 合并日志模式下，列出合并文件的轮转历史；当前临时指向合并日志路径。
+// Files 列出合并日志 frpc.log 的所有轮转副本。在合并日志模式下，所有
+// instance 共享同一份历史；前端仍可调用此接口知道有哪些归档存在。
 func (h *LogsHandler) Files(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if !h.m.Exists(id) {
@@ -101,19 +101,19 @@ func (h *LogsHandler) Files(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// Clear is TEMPORARILY broken: 当前实现物理删除合并日志文件 frpc.log，
-// 影响所有 frpc 实例的日志历史（不仅是 path 中的 id）。Task 9 将替换为
-// h.m.SetLogViewSince(id, time.Now().UnixMilli()) 水印方案，不再触碰物理文件。
-// 在 Task 9 合并前，本接口应被前端避免调用。
+// Clear sets a "view since" timestamp for this instance instead of deleting
+// the combined log file. Subsequent GET /logs and WS /logs/tail will skip
+// lines older than this timestamp. The physical frpc.log is preserved so
+// operators can still grep historical data on disk.
 func (h *LogsHandler) Clear(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	if !h.m.Exists(id) {
 		WriteError(w, http.StatusNotFound, CodeConfigNotFound, "config not found", nil)
 		return
 	}
-	// TODO(Task 9): 替换为 h.m.SetLogViewSince(id, time.Now().UnixMilli()) 而非删文件。
-	if files, _, err := util.FindLogFiles(h.logCombinedPath()); err == nil {
-		util.DeleteFiles(files)
+	if err := h.m.SetLogViewSince(id, time.Now().UnixMilli()); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", err.Error(), nil)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
