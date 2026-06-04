@@ -25,3 +25,9 @@ src/api/schema.d.ts
 *.njsproj
 *.sln
 *.sw?
+
+# E2E test artifacts
+e2e-tmp/
+playwright-report/
+test-results/
+.playwright/
