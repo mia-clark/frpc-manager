@@ -631,15 +631,15 @@ xlog ctx），主要分布在 `client/service.go`（vnet/admin）与 `client/con
 | Query | 默认 | 说明 |
 |---|---|---|
 | `lines` | 200 | 返回最多多少行 |
-| `offset` | 0 | 字节偏移，用于分页 |
+| `offset` | 0 | 兼容字段，**合并日志模式下被忽略**；保留仅为前端旧版本兼容，不再用于分页 |
 
 返回：
 
 ```json
-{ "lines": ["[I] 2026-...", "..."], "next_offset": 1234 }
+{ "lines": ["[I] 2026-...", "..."], "next_offset": 0 }
 ```
 
-文件不存在时返回 `200` + 空数组（不报错）。
+`next_offset` 始终为 `0`（合并日志模式下不支持 offset 翻页）。文件不存在时返回 `200` + 空数组（不报错）。
 
 ### 8.2 GET `/api/v1/configs/{id}/logs/files` — 列出滚转日志
 
