@@ -101,6 +101,9 @@ func runServe(args []string) int {
 		fmt.Fprintf(os.Stderr, "load configs: %v\n", err)
 		return 1
 	}
+	// 升级迁移：把 v1.2.22 及之前写下的 per-id .log 路径重写为 combined log
+	// 路径，否则旧 toml 启动的 frpc 仍按旧路径写日志，UI 读 combined 会空白。
+	mgr.MigratePaths()
 	mgr.ArmAllAutoDelete()
 	mgr.AutoStart()
 	defer mgr.Shutdown()

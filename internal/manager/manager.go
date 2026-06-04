@@ -394,6 +394,57 @@ func (m *Manager) CombinedLogPath() string {
 	return filepath.Join(m.opts.LogsDir, CombinedLogFileName)
 }
 
+// MigratePaths 把所有 instance toml 里过期的 LogFile（v1.2.22 及之前的 per-id
+// .log 路径）重写为当前期望的合并日志路径。这是 v1.2.23 → v1.2.24 的升级
+// 迁移：v1.2.23 把读取侧改成了 combined log，但 LoadAll 不会重写已有 toml，
+// 导致旧用户升级后 frpc 仍按 toml 里的旧 log.to 写到 per-id .log，UI 读
+// combined log 永远是空。这里在 LoadAll 之后、AutoStart 之前调用一次以
+// 解决这个升级路径。
+//
+// 仅当当前 LogFile 与期望值不同（且当前值看起来是个 .log 文件 — 避免误改
+// 用户自定义的 console / 空字符串等设置）时才重写。Store.Path 同理刷新。
+//
+// 任何单个 instance 的迁移失败只记日志, 不阻塞 daemon 启动。
+func (m *Manager) MigratePaths() {
+	m.mu.RLock()
+	instances := make([]*instance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		instances = append(instances, inst)
+	}
+	m.mu.RUnlock()
+
+	expectedLog := filepath.ToSlash(filepath.Join(m.opts.LogsDir, CombinedLogFileName))
+	for _, inst := range instances {
+		data := inst.Data()
+		if data == nil {
+			continue
+		}
+		// 仅当 LogFile 是个常规 .log 文件路径且与期望不一致时迁移。
+		// 跳过 "console" / "" 等用户显式表达"不写文件"的情形。
+		current := filepath.ToSlash(data.LogFile)
+		if current == expectedLog {
+			continue
+		}
+		if current == "" || current == "console" {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(current), ".log") {
+			continue
+		}
+		oldPath := data.LogFile
+		if err := m.writeConfig(inst.path, data); err != nil {
+			m.opts.Logger.Warn("migrate LogFile failed",
+				slog.String("id", inst.id), slog.Any("err", err))
+			continue
+		}
+		m.opts.Logger.Info("migrated LogFile to combined log",
+			slog.String("id", inst.id),
+			slog.String("from", oldPath),
+			slog.String("to", expectedLog),
+		)
+	}
+}
+
 func (m *Manager) pathFor(id string) string {
 	return filepath.Join(m.opts.ProfilesDir, id+".toml")
 }
