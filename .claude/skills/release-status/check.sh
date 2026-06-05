@@ -20,9 +20,10 @@
 set -eu
 
 REPO="${REPO:-mia-clark/frpc-manager}"
+BIN_NAME="${BIN_NAME:-frpcmgrd}"           # 资产前缀, 用于 HEAD fallback 探测
 API="https://api.github.com/repos/${REPO}"
 WEB="https://github.com/${REPO}"
-EXPECTED_ASSETS="${EXPECTED_ASSETS:-19}"   # 17 平台压缩包 + checksums.txt + 1 余量
+EXPECTED_ASSETS="${EXPECTED_ASSETS:-19}"   # 平台压缩包 + checksums.txt
 
 # 颜色（管道里禁用）
 if [ -t 1 ]; then
@@ -88,8 +89,9 @@ for r in rows:
 # 表 B — 最近 5 个 tag 的发布状态（API 优先 + HEAD fallback）
 # ---------------------------------------------------------------------------
 list_recent_tags() {
-    # 用 git ls-remote 直接取（不耗 API 配额）
-    git ls-remote --tags origin 2>/dev/null \
+    # 用 git ls-remote 直查目标仓库 URL（不耗 API 配额，跨仓库也稳）
+    # 不用本地 origin：当前 cwd 可能在另一个仓库，origin 会指错
+    git ls-remote --tags "${WEB}.git" 2>/dev/null \
         | grep -v '\^{}' \
         | sed 's#.*refs/tags/##' \
         | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
@@ -113,7 +115,7 @@ print('{} {}'.format(len(a), st))
     else
         # HEAD fallback: release page + 1 个标志性 asset
         page=$(head_status "${WEB}/releases/tag/${_tag}")
-        asset=$(head_status "${WEB}/releases/download/${_tag}/frpcmgrd_${_tag#v}_linux_amd64.tar.gz")
+        asset=$(head_status "${WEB}/releases/download/${_tag}/${BIN_NAME}_${_tag#v}_linux_amd64.tar.gz")
         if [ "$page" = "200" ] && [ "$asset" = "302" ]; then
             echo "~ released"   # 资产数未知
         elif [ "$page" = "200" ]; then
