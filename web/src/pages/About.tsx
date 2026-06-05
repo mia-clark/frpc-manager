@@ -354,6 +354,8 @@ function renderInstallTab(opts: { token: TokenLike; copyText: (s: string) => voi
   const winInstall = `irm ${INSTALL_URL_PS1} | iex`;
   const cnUpdate = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- --update --force`;
   const cnUninstall = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- --uninstall`;
+  const winCustom = `$env:FRPCMGR_PORT=9000; $env:FRPCMGR_API_TOKEN='我的强随机令牌'; $env:ASSUME_YES=1; irm ${INSTALL_URL_PS1} | iex`;
+  const linuxFull = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- -y -p 9000 -t 我的强随机令牌`;
   const upgradeLegacy = `# 旧版 frpmgrd 部署一键迁移到 frpcmgrd（服务/数据/配置）
 # 幂等，无旧部署也安全；FRPMGR_* 环境变量自动改为 FRPCMGR_*
 fmc upgrade-legacy`;
@@ -409,7 +411,40 @@ FRPCMGR_API_TOKEN=$(openssl rand -hex 32) ./frpcmgrd serve`;
       <CodeBlock code={ghAuto} token={token} onCopy={copyText} language="sh" />
 
       <SectionTitle icon={<ThunderboltOutlined />}>Windows（管理员 PowerShell）</SectionTitle>
+      <Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12.5 }}>
+        交互安装（逐步问端口和令牌）：
+      </Paragraph>
       <CodeBlock code={winInstall} token={token} onCopy={copyText} language="powershell" />
+      <Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12.5 }}>
+        全自动 + 指定端口 + 令牌（PowerShell 用环境变量代替命令行参数）：
+      </Paragraph>
+      <CodeBlock code={winCustom} token={token} onCopy={copyText} language="powershell" />
+
+      <Alert
+        type="info"
+        showIcon
+        message="完整三系统对照（指定端口 + 令牌，全自动一键复制）"
+        description={
+          <div style={{ fontSize: 12.5 }}>
+            <div style={{ marginTop: 8 }}>
+              <Text strong>Linux</Text>（systemd / OpenRC，开机自启）：
+            </div>
+            <CodeBlock code={linuxFull} token={token} onCopy={copyText} language="sh" />
+            <div>
+              <Text strong>macOS</Text>（launchd，开机自启）—— 与 Linux 同脚本：
+            </div>
+            <CodeBlock code={linuxFull} token={token} onCopy={copyText} language="sh" />
+            <div>
+              <Text strong>Windows</Text>（NSSM 包装 Windows 服务，<Text type="warning">需管理员 PowerShell</Text>）：
+            </div>
+            <CodeBlock code={winCustom} token={token} onCopy={copyText} language="powershell" />
+            <div style={{ marginTop: 4, opacity: 0.7 }}>
+              把 <Text code>9000</Text> 和 <Text code>我的强随机令牌</Text> 改成你想要的值；三套都装完用统一的 <Text code>fmc start/status/info</Text> 运维。
+            </div>
+          </div>
+        }
+        style={{ marginTop: 14, marginBottom: 14 }}
+      />
 
       <SectionTitle>升级到最新版（保留端口/令牌/数据）</SectionTitle>
       <CodeBlock code={cnUpdate} token={token} onCopy={copyText} language="sh" />

@@ -96,6 +96,51 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/mai
 curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.sh | sh -s -- -y -p 9000 -t 我的令牌
 ```
 
+### 🪟 Windows 一键安装（管理员 PowerShell）
+
+> 一行命令安装并注册为 Windows 服务。下面命令必须在**管理员身份的 PowerShell** 里运行（右键 PowerShell → 以管理员身份运行）。
+
+```powershell
+# 全自动（默认端口 8080 + 自动生成强随机令牌）
+$env:ASSUME_YES=1; irm https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.ps1 | iex
+
+# 全自动 + 指定端口
+$env:FRPCMGR_PORT=9000; $env:ASSUME_YES=1; irm https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.ps1 | iex
+
+# 全自动 + 指定端口 + 指定令牌（最常用！）
+$env:FRPCMGR_PORT=9000; $env:FRPCMGR_API_TOKEN='我的强随机令牌'; $env:ASSUME_YES=1; irm https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.ps1 | iex
+
+# 一行卸载
+irm https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.ps1 | iex; .\install.ps1 -Uninstall
+```
+
+> Windows PowerShell 通过 `irm | iex` 管道执行脚本时**无法直接传命令行参数**，所以用环境变量代替（`install.ps1` 已支持读取 `FRPCMGR_*` / `ASSUME_YES`）。**自动选最快下载源**（智能代理 + tar/zip 校验防伪 200，详见"下载策略"）。
+
+---
+
+### 🌐 完整三系统对照（指定端口 + 令牌，全自动）
+
+把 `9000` 和 `我的强随机令牌` 替换成你想要的端口和令牌，**复制整行直接回车**：
+
+**Linux**（国内镜像，systemd 服务，开机自启）
+```sh
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y -p 9000 -t 我的强随机令牌
+```
+
+**macOS**（launchd 服务，开机自启）
+```sh
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y -p 9000 -t 我的强随机令牌
+```
+
+**Windows**（NSSM 包装为 Windows 服务，**需管理员 PowerShell**）
+```powershell
+$env:FRPCMGR_PORT=9000; $env:FRPCMGR_API_TOKEN='我的强随机令牌'; $env:ASSUME_YES=1; irm https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.ps1 | iex
+```
+
+> Linux / macOS 用同一个 `install.sh`（脚本自动识别系统和架构），所以命令一字不差；Windows 是独立 `install.ps1` + NSSM。三套都装完即用 `fmc start/status/info` 等统一命令运维。
+
+---
+
 ### 📋 全部参数说明
 
 | 参数 | 作用 |
