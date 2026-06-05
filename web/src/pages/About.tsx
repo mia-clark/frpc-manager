@@ -349,7 +349,7 @@ function renderInstallTab(opts: { token: TokenLike; copyText: (s: string) => voi
 
   const cnInteractive = `curl -fsSL ${INSTALL_URL_CN} | sh`;
   const cnAuto = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- -y`;
-  const cnCustom = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- -p 9000 -t 我的强随机令牌 -y`;
+  const cnCustom = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- -y -p 9000 -t 我的强随机令牌`;
   const ghAuto = `curl -fsSL ${INSTALL_URL_GH} | sh -s -- -y`;
   const winInstall = `irm ${INSTALL_URL_PS1} | iex`;
   const cnUpdate = `curl -fsSL ${INSTALL_URL_CN} | sh -s -- --update --force`;

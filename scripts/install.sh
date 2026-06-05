@@ -86,7 +86,7 @@ ${C_BOLD}frpcmgrd 一键安装脚本${C_RST}
   sh install.sh -p 9000                         # 指定端口, 仅询问令牌
   sh install.sh -t my-secret-token              # 指定令牌, 仅询问端口
   sh install.sh -p 9000 -t my-secret-token      # 端口+令牌都指定, 零交互
-  sh install.sh -p 9000 -t my-secret -y         # 完全静默安装
+  sh install.sh -y -p 9000 -t my-secret         # 完全静默安装
   sh install.sh --port random                   # 随机端口
   sh install.sh -v v1.2.10 -p 8888              # 指定版本+端口
   sh install.sh --update                        # 全自动更新到最新版

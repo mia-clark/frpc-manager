@@ -92,7 +92,7 @@ frpcmgrd 一键安装脚本 (Windows)
 示例:
   install.ps1                              # 全交互: 逐项询问端口/令牌
   install.ps1 -Port 9000                   # 指定端口, 仅询问令牌
-  install.ps1 -Port 9000 -Token secret -Yes  # 完全静默安装
+  install.ps1 -Yes -Port 9000 -Token secret  # 完全静默安装
   install.ps1 -Port random                 # 随机端口
   install.ps1 -Version v1.2.14 -Port 8888  # 指定版本+端口
   install.ps1 -Update                      # 全自动更新到最新版

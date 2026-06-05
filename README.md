@@ -42,16 +42,16 @@ curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh
 curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y
 
 # 指定端口 9000 + 自动生成令牌
-curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -p 9000 -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y -p 9000
 
 # 指定端口 9000 + 指定令牌（端口、令牌都自己定）
-curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -p 9000 -t 我的令牌 -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y -p 9000 -t 我的令牌
 
 # 随机端口 + 自动生成令牌
-curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --port random -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y --port random
 
 # 指定安装某个版本
-curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -v v1.2.11 -p 9000 -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y -p 9000 -v v1.2.11
 ```
 
 **一行全自动更新**（保留端口/令牌/数据，只换程序并重启）：
@@ -67,7 +67,7 @@ curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --uninstall
 ```
 
 > 没装 `curl`？把上面每条命令的 `curl -fsSL <地址>` 换成 `wget -qO- <地址>` 即可，例如：
-> `wget -qO- https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -p 9000 -t 我的令牌 -y`
+> `wget -qO- https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y -p 9000 -t 我的令牌`
 
 装完后终端会打印**访问地址、API 令牌和常用命令**。打开浏览器访问 `http://你的IP:端口/`，填入令牌即可登录后台。
 
@@ -93,7 +93,7 @@ curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --uninstall
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.sh)"
 
 # 全自动（带参数）
-curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.sh | sh -s -- -p 9000 -t 我的令牌 -y
+curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.sh | sh -s -- -y -p 9000 -t 我的令牌
 ```
 
 ### 📋 全部参数说明
