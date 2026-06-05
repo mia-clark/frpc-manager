@@ -12,7 +12,7 @@ import {
   SafetyCertificateOutlined,
   ApiOutlined,
   BookOutlined,
-  ReadOutlined,
+  InfoCircleOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
@@ -113,7 +113,7 @@ const MainLayout: React.FC = () => {
         type: 'group',
         label: '系统',
         children: [
-          { key: '/help', icon: <ReadOutlined />, label: '帮助 / 文档' },
+          { key: '/about', icon: <InfoCircleOutlined />, label: '关于' },
           { key: '/settings', icon: <SettingOutlined />, label: '设置' },
         ],
       },
