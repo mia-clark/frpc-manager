@@ -226,7 +226,7 @@ fmc uninstall        # 卸载`;
                 <>
                   <CmdBlock
                     caption="① Linux / macOS — 国内镜像（推荐，加速下载）"
-                    code="curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh"
+                    code="curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh"
                   />
                   <CmdBlock
                     caption="② Linux / macOS — GitHub 官方（海外或直连可用）"

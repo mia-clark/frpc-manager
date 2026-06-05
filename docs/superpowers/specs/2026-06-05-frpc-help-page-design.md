@@ -28,7 +28,7 @@
 ### Collapse 折叠面板（默认展开「一键安装」）
 
 **面板 1 — 一键安装**：
-- Linux/macOS · 国内镜像：`curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh`
+- Linux/macOS · 国内镜像：`curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh`
 - Linux/macOS · GitHub 官方：`sh -c "$(curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.sh)"`
 - Windows（管理员 PowerShell）：`irm https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts/install.ps1 | iex`
 

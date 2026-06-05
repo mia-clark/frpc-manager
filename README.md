@@ -32,57 +32,57 @@
 **最简单：交互安装**（回车逐步选端口、令牌）
 
 ```sh
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh
 ```
 
 **全自动安装**（一行搞定，不问任何问题）：
 
 ```sh
 # 默认端口 8080 + 自动生成强随机令牌
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -y
 
 # 指定端口 9000 + 自动生成令牌
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- -p 9000 -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -p 9000 -y
 
 # 指定端口 9000 + 指定令牌（端口、令牌都自己定）
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- -p 9000 -t 我的令牌 -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -p 9000 -t 我的令牌 -y
 
 # 随机端口 + 自动生成令牌
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --port random -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --port random -y
 
 # 指定安装某个版本
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- -v v1.2.11 -p 9000 -y
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -v v1.2.11 -p 9000 -y
 ```
 
 **一行全自动更新**（保留端口/令牌/数据，只换程序并重启）：
 
 ```sh
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --update --force
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --update --force
 ```
 
 **一行卸载**：
 
 ```sh
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --uninstall
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --uninstall
 ```
 
 > 没装 `curl`？把上面每条命令的 `curl -fsSL <地址>` 换成 `wget -qO- <地址>` 即可，例如：
-> `wget -qO- https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- -p 9000 -t 我的令牌 -y`
+> `wget -qO- https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- -p 9000 -t 我的令牌 -y`
 
 装完后终端会打印**访问地址、API 令牌和常用命令**。打开浏览器访问 `http://你的IP:端口/`，填入令牌即可登录后台。
 
 ### 🌐 镜像域名（主用 + 备用）
 
-所有域名路径都一样：`/frp-mgr/install.sh`（即仓库的 `scripts/install.sh`）。哪个快用哪个，不通就换下一个：
+所有域名路径都一样：`/frpc-mgr/install.sh`（即仓库的 `scripts/install.sh`）。哪个快用哪个，不通就换下一个：
 
 | 类型 | 域名 | 完整地址 |
 |---|---|---|
-| **主用** | `gh-raw.966788.xyz` | `https://gh-raw.966788.xyz/frp-mgr/install.sh` |
-| 备用 1 | `gh-raw.s03.qzz.io` | `https://gh-raw.s03.qzz.io/frp-mgr/install.sh` |
-| 备用 2 | `gh-raw.s04.qzz.io` | `https://gh-raw.s04.qzz.io/frp-mgr/install.sh` |
-| 备用 3 | `gh-raw.s05.qzz.io` | `https://gh-raw.s05.qzz.io/frp-mgr/install.sh` |
-| 备用 4 | `gh-raw.s06.qzz.io` | `https://gh-raw.s06.qzz.io/frp-mgr/install.sh` |
-| 备用 5 | `gh-raw.s07.qzz.io` | `https://gh-raw.s07.qzz.io/frp-mgr/install.sh` |
+| **主用** | `gh-raw.966788.xyz` | `https://gh-raw.966788.xyz/frpc-mgr/install.sh` |
+| 备用 1 | `gh-raw.s03.qzz.io` | `https://gh-raw.s03.qzz.io/frpc-mgr/install.sh` |
+| 备用 2 | `gh-raw.s04.qzz.io` | `https://gh-raw.s04.qzz.io/frpc-mgr/install.sh` |
+| 备用 3 | `gh-raw.s05.qzz.io` | `https://gh-raw.s05.qzz.io/frpc-mgr/install.sh` |
+| 备用 4 | `gh-raw.s06.qzz.io` | `https://gh-raw.s06.qzz.io/frpc-mgr/install.sh` |
+| 备用 5 | `gh-raw.s07.qzz.io` | `https://gh-raw.s07.qzz.io/frpc-mgr/install.sh` |
 
 ### 🌍 海外服务器（能直连 GitHub）
 
@@ -117,23 +117,23 @@ curl -fsSL https://raw.githubusercontent.com/mia-clark/frpc-manager/main/scripts
 
 ```sh
 # 一行更新（国内镜像）
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --update
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --update
 
 # 更新到指定版本 / 强制重装
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --update -v v1.2.11
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --update --force
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --update -v v1.2.11
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --update --force
 ```
 
 想无人值守自动更新？丢进 `crontab`，例如每天凌晨 4 点：
 
 ```sh
-0 4 * * * curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --update >> /var/log/frpcmgrd-update.log 2>&1
+0 4 * * * curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --update >> /var/log/frpcmgrd-update.log 2>&1
 ```
 
 ### 卸载
 
 ```sh
-curl -fsSL https://gh-raw.966788.xyz/frp-mgr/install.sh | sh -s -- --uninstall
+curl -fsSL https://gh-raw.966788.xyz/frpc-mgr/install.sh | sh -s -- --uninstall
 ```
 
 会停止并移除系统服务、删除二进制；是否删除配置和数据目录会单独询问你。
