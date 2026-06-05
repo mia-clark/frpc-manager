@@ -202,18 +202,19 @@ FRPCMGR_API_TOKEN=$(openssl rand -hex 32) ./frpcmgrd serve
 一键安装会附带一个统一管理命令 **`fmc`**（已加入 PATH），它会自动适配底层服务管理器（systemd / OpenRC / launchd / Windows 服务），无需再记平台相关的长命令：
 
 ```bash
-fmc start        # 启动服务
-fmc stop         # 停止服务
-fmc restart      # 重启服务
-fmc status       # 查看运行状态
-fmc logs -f      # 查看实时日志
-fmc enable       # 设置开机自启
-fmc disable      # 取消开机自启
-fmc url          # 显示访问地址与 API 令牌（忘了令牌时很有用）
-fmc config       # 查看配置（fmc config edit 用编辑器打开）
-fmc update       # 更新到最新版（保留端口/令牌/数据）
-fmc uninstall    # 卸载
-fmc help         # 查看全部命令
+fmc start           # 启动服务
+fmc stop            # 停止服务
+fmc restart         # 重启服务
+fmc status          # 查看运行状态
+fmc logs -f         # 查看实时日志
+fmc enable          # 设置开机自启
+fmc disable         # 取消开机自启
+fmc url             # 显示访问地址与 API 令牌（忘了令牌时很有用）
+fmc config          # 查看配置（fmc config edit 用编辑器打开）
+fmc update          # 更新到最新版（保留端口/令牌/数据）
+fmc uninstall       # 卸载
+fmc upgrade-legacy  # 一键迁移旧版 frpmgrd 部署到 frpcmgrd（服务/数据/配置）
+fmc help            # 查看全部命令
 ```
 
 > Windows 同样提供 `fmc`（在 PowerShell 或 cmd 中执行；安装目录已加入系统 PATH，新开终端生效）。

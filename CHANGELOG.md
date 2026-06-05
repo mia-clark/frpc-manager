@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 重大变更（与 frps-manager 对称改名）
+- 二进制/服务名 `frpmgrd` → `frpcmgrd`、环境变量前缀 `FRPMGR_` → `FRPCMGR_`、Go module → `github.com/mia-clark/frpc-manager`、数据目录 `/var/lib/frpmgrd` → `/var/lib/frpcmgrd`，与服务端 `frps-manager` 严格区分。
+
+### 新增
+- `fmc upgrade-legacy`：一键把旧版 `frpmgrd` 部署（服务/数据/配置）迁移到新 `frpcmgrd`，幂等、可随时执行；自动把 `FRPMGR_*` 配置转为 `FRPCMGR_*`、迁移数据目录、清理旧服务与二进制。
+
+### 迁移指引
+- 旧部署升级后执行一次 `fmc upgrade-legacy` 即可完成迁移；install/update 不会自动改动旧部署。
+
 ### 修复
 - **多实例日志互串**：当多个 frpc 实例同进程运行时，由于 frp v0.69.1 使用全局 logger 变量，后启动的实例会"抢走"所有日志输出。现已通过 daemon 注入 xlog `[inst=<id>]` 前缀 + 合并日志文件 `frpc.log` + API 层按前缀过滤的方式彻底解决。前端无改动。
 - 修复 WS `/api/v1/configs/{id}/logs/tail` 中 `coder/websocket` hijack 后 `r.Context()` 不取消导致的 goroutine 泄漏（改用 `conn.CloseRead(r.Context())` 替代）。
