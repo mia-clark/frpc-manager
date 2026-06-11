@@ -19,14 +19,17 @@ all ipk（仅 ~8KB，不含二进制）
 
 opkg install 时 → postinst 调 frpcmgrd-fetch →
   ① uname -m + 字节序 识别本机 CPU → 映射到 goreleaser 资产架构
-  ② 从 GitHub Release 拉 frpcmgrd_<版本>_linux_<架构>.tar.gz（内置 10 路国内镜像加速 + 直连兜底）
+  ② 拉 frpcmgrd_<版本>_linux_<架构>.tar.gz，下载优先级：
+       ⒈ 自建 gh-raw 源（首选）   {base}/frpc-mgr-releases/v<版本>/<file>
+       ⒉ 公共 GitHub 代理（兜底）  {proxy}https://github.com/.../releases/download/...
+       ⒊ GitHub 直连（最后兜底）
   ③ 解出二进制装到 /usr/bin/frpcmgrd
   ④ enable + start
 ```
 
 **好处**：一个包覆盖所有架构；彻底甩掉 opkg 架构串映射（不再有 `mips_24kc`/`aarch64_cortex-a53`、不用 `--force-architecture`）；连 mips64le 也能装（只要 Release 有对应 tar.gz）。
 
-**唯一代价**：安装时需要能联网拉二进制（路由器本就联网，且走内置国内镜像）。装时无网也不致命——壳子照样装上，联网后手动跑一次 `frpcmgrd-fetch` 即可。
+**唯一代价**：安装时需要能联网拉二进制（路由器本就联网，且优先走自建源）。装时无网也不致命——壳子照样装上，联网后手动跑一次 `frpcmgrd-fetch` 即可。
 
 `frpcmgrd-fetch` 支持的 CPU（`uname -m` → 拉取的二进制）：x86_64、aarch64、armv7/armv6、i386、mips/mipsel（按字节序）、mips64/mips64le、riscv64、loongarch64。
 
@@ -81,9 +84,11 @@ uci commit frpcmgrd
 | `docs_enabled` | `1` | 是否开放 `/api/docs` |
 | `cors_origins` | `*` | CORS 白名单 |
 | `self_update` | `0` | Web 端自更新，OpenWrt 默认关（用 `frpcmgrd-fetch` 升级） |
-| `version` | （注释） | 指定 `frpcmgrd-fetch` 拉取的版本，留空=随包版本 |
-| `download_proxy` | （注释） | 指定单一下载镜像，跳过内置列表 |
-| `no_proxy` | `0` | 1=跳过镜像直连 GitHub |
+| `version` | （注释） | `frpcmgrd-fetch` 拉取的版本，留空=随包版本，填 `latest`=拉最新 |
+| `download_proxy` | （注释） | 指定单一公共代理，跳过内置公共代理列表 |
+| `no_proxy` | `0` | 1=跳过自建源+公共代理，直连 GitHub |
+| `release_proxy_bases` | （注释） | 覆盖内置自建 gh-raw 源域名列表（逗号分隔） |
+| `install_proxy_key` | （注释） | 覆盖自建源资源键（默认 frpc-mgr-releases） |
 
 > 查看自动生成的令牌：`uci get frpcmgrd.main.token`
 
@@ -96,7 +101,8 @@ uci commit frpcmgrd
 logread -e frpcmgrd -f            # 实时日志
 
 # 升级二进制（保留配置/数据）：
-frpcmgrd-fetch 1.2.40             # 拉指定版本；不带参数=拉随包 VERSION 记录的版本
+frpcmgrd-fetch latest            # 查最新版（经自建源/GitHub API）并安装
+frpcmgrd-fetch 1.2.40            # 或拉指定版本；不带参数=随包 VERSION 记录的版本
 # 或重装新版 all ipk（postinst 会自动拉新版二进制）：
 opkg install frpcmgrd_<新版本>-1_all.ipk
 
@@ -140,7 +146,7 @@ openwrt/
 │   ├── etc/
 │   │   ├── init.d/frpcmgrd          procd 服务脚本（读 UCI → 注入 FRPCMGR_* 环境变量）
 │   │   └── config/frpcmgrd          UCI 默认配置
-│   └── usr/sbin/frpcmgrd-fetch      按 CPU 联网拉二进制（含 10 路镜像 + 空间预检）
+│   └── usr/sbin/frpcmgrd-fetch      按 CPU 联网拉二进制（自建源首选 + 公共代理兜底 + 空间预检）
 └── scripts/
     ├── postinst.sh                 装后调 fetcher 拉二进制 → enable+start
     ├── prerm.sh                    卸载/升级前 stop+disable

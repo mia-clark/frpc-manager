@@ -1,20 +1,24 @@
 #!/bin/sh
 # =============================================================================
-# frpcmgrd-fetch — 识别本机 CPU 架构，从 GitHub Release 拉取对应的 frpcmgrd
-#                  静态二进制并安装到 /usr/bin/frpcmgrd。
+# frpcmgrd-fetch — 识别本机 CPU 架构，拉取对应的 frpcmgrd 静态二进制并装到 /usr/bin
 #
-#   由 all 架构 ipk 的 postinst 在安装时调用；也可随时手动重跑（联网更新二进制）。
-#   版本默认读 /usr/lib/frpcmgrd/VERSION（打包时写入）；可用参数或 UCI 覆盖。
+#   下载优先级（与 cloudflared-manager/install.sh 同款）：
+#     ① 自建 gh-raw 通道（首选）：{base}/{key}/{tag}/{file}
+#     ② 公共 GitHub 代理（兜底）：{proxy}https://github.com/.../releases/download/...
+#     ③ GitHub 直连（最后兜底）
 #
-#   用法:
-#     frpcmgrd-fetch                 # 装/重装 VERSION 文件里记录的版本
-#     frpcmgrd-fetch 1.2.34          # 装指定版本
-#     frpcmgrd-fetch --no-proxy      # 跳过镜像直连 GitHub
+#   由 all 架构 ipk 的 postinst 在安装时调用；也可随时手动重跑：
+#     frpcmgrd-fetch                 # 装/重装 VERSION 文件记录的版本
+#     frpcmgrd-fetch 1.2.40          # 装指定版本
+#     frpcmgrd-fetch latest          # 查最新版（经自建源/GitHub API）并安装（更新用）
+#     frpcmgrd-fetch --no-proxy      # 跳过自建源与公共代理，直连 GitHub
 #
-#   UCI 可选项 (/etc/config/frpcmgrd main 节):
-#     option version '1.2.34'        # 覆盖默认版本
-#     option download_proxy 'https://my.mirror/'  # 指定单一镜像，跳过内置列表
-#     option no_proxy '1'            # 跳过所有镜像直连
+#   UCI 可选项 (/etc/config/frpcmgrd main 节)：
+#     option version '1.2.34'          覆盖默认版本；填 latest 表示拉最新
+#     option download_proxy 'https://my.mirror/'  指定单一公共代理（跳过内置公共代理列表）
+#     option no_proxy '1'              跳过自建源 + 公共代理，直连 GitHub
+#     option release_proxy_bases 'https://a,https://b'  覆盖内置自建 gh-raw 域名列表（逗号分隔）
+#     option install_proxy_key 'frpc-mgr-releases'  覆盖自建源的资源键（一般无需改）
 # =============================================================================
 set -eu
 
@@ -23,7 +27,21 @@ BIN_NAME="frpcmgrd"
 INSTALL_DIR="/usr/bin"
 LIBDIR="/usr/lib/frpcmgrd"
 
-# GitHub release 下载镜像（公开 4 家在前，自建 6 家在后；与 install.sh 一致）
+# 自建 GitHub-Release 代理（gh-raw）首选通道：
+#   版本查询 GET {base}/{key}/latest      -> JSON, 取 "tag"
+#   资产下载 GET {base}/{key}/{tag}/{file} -> 二进制流
+GHRAW_BASES_DEFAULT="
+https://gh-raw.966788.xyz
+https://gh-raw.988669.xyz
+https://gh-raw.s03.qzz.io
+https://gh-raw.s04.qzz.io
+https://gh-raw.s05.qzz.io
+https://gh-raw.s06.qzz.io
+https://gh-raw.s07.qzz.io
+"
+GHRAW_KEY_DEFAULT="frpc-mgr-releases"
+
+# 公共 GitHub 代理（仅作兜底；自建源全失败才用）
 DL_PROXIES="
 https://gh-proxy.com/
 https://ghfast.top/
@@ -41,36 +59,83 @@ log() { logger -t frpcmgrd-fetch "$*" 2>/dev/null; printf '%s\n' "[frpcmgrd-fetc
 die() { printf '%s\n' "[frpcmgrd-fetch][x] $*" >&2; logger -t frpcmgrd-fetch "ERROR: $*" 2>/dev/null; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 解析参数 / UCI，确定版本与代理策略
+# 解析参数 / UCI
 # ---------------------------------------------------------------------------
 VERSION=""
 NO_PROXY=0
 PROXY_OVERRIDE=""
+GHRAW_BASES=""
+GHRAW_KEY=""
 
 for a in "$@"; do
 	case "$a" in
 		--no-proxy) NO_PROXY=1 ;;
 		--proxy=*)  PROXY_OVERRIDE="${a#--proxy=}" ;;
-		-h|--help)  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		-*)         die "未知参数: $a" ;;
 		*)          VERSION="$a" ;;
 	esac
 done
 
-# UCI 覆盖（仅在命令行未指定时生效）
 if command -v uci >/dev/null 2>&1; then
 	[ -n "$VERSION" ]        || VERSION="$(uci -q get frpcmgrd.main.version 2>/dev/null || true)"
 	[ -n "$PROXY_OVERRIDE" ] || PROXY_OVERRIDE="$(uci -q get frpcmgrd.main.download_proxy 2>/dev/null || true)"
+	GHRAW_BASES="$(uci -q get frpcmgrd.main.release_proxy_bases 2>/dev/null || true)"
+	GHRAW_KEY="$(uci -q get frpcmgrd.main.install_proxy_key 2>/dev/null || true)"
 	[ "$NO_PROXY" = "1" ] || [ "$(uci -q get frpcmgrd.main.no_proxy 2>/dev/null || echo 0)" != "1" ] || NO_PROXY=1
 fi
 
+# 自建源域名 / 键的最终取值（UCI 逗号分隔 -> 空格分隔）
+[ -n "$GHRAW_BASES" ] && GHRAW_BASES="$(printf '%s' "$GHRAW_BASES" | tr ',' ' ')" || GHRAW_BASES="$GHRAW_BASES_DEFAULT"
+[ -n "$GHRAW_KEY" ] || GHRAW_KEY="$GHRAW_KEY_DEFAULT"
+
+# ---------------------------------------------------------------------------
+# 下载工具
+# ---------------------------------------------------------------------------
+fetch_file() {  # <url> <dest>
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 60 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q --timeout=60 -O "$2" "$1"
+	else die "未找到 curl 或 wget，无法下载"; fi
+}
+fetch_stdout() {  # <url>
+	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1"
+	elif command -v wget >/dev/null 2>&1; then wget -qO- --timeout=15 "$1"
+	else return 1; fi
+}
+verify_targz() { [ -s "$1" ] && tar -tzf "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------------------
+# 版本解析：留空 / latest 时，先问自建源 {base}/{key}/latest 取 "tag"，再回落 GitHub API
+# ---------------------------------------------------------------------------
+resolve_latest() {
+	_tag=""
+	if [ "$NO_PROXY" != "1" ]; then
+		for _base in $GHRAW_BASES; do
+			_tag="$(fetch_stdout "${_base%/}/${GHRAW_KEY}/latest" 2>/dev/null \
+				| grep '"tag"' | head -n1 \
+				| sed -E 's/.*"tag"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+			[ -n "$_tag" ] && break
+		done
+	fi
+	if [ -z "$_tag" ]; then
+		_tag="$(fetch_stdout "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+			| grep '"tag_name"' | head -n1 \
+			| sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+	fi
+	printf '%s' "${_tag#v}"
+}
+
 # 默认版本读打包时写入的 VERSION 文件
 [ -n "$VERSION" ] || VERSION="$(cat "$LIBDIR/VERSION" 2>/dev/null || true)"
-[ -n "$VERSION" ] || die "无法确定版本：既无参数也无 UCI 也无 $LIBDIR/VERSION"
+if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
+	log "查询最新版本..."
+	VERSION="$(resolve_latest)"
+	[ -n "$VERSION" ] || die "无法获取最新版本（自建源与 GitHub API 均不可用）。请用 frpcmgrd-fetch <版本> 指定"
+fi
 VERSION="${VERSION#v}"   # 统一去掉前导 v
 
 # ---------------------------------------------------------------------------
-# 探测本机字节序（mips/mips64 需据此选大小端）
+# 架构探测
 # ---------------------------------------------------------------------------
 detect_endian() {
 	# od -tx4 按主机字节序把这 4 字节解释成一个整数再打印，故可据此判端序
@@ -81,8 +146,6 @@ detect_endian() {
 		*)        echo le ;;   # od 不可用/格式异常：嵌入式多为小端，默认 le
 	esac
 }
-
-# 把 uname -m 映射到 goreleaser 资产架构 token
 detect_token() {
 	_m="$(uname -m 2>/dev/null || echo unknown)"
 	case "$_m" in
@@ -102,49 +165,54 @@ detect_token() {
 }
 
 # ---------------------------------------------------------------------------
-# 下载工具与校验
+# 下载：① 自建 gh-raw 首选 → ② 公共代理兜底 → ③ GitHub 直连
 # ---------------------------------------------------------------------------
-fetch_file() {  # <url> <dest>
-	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --max-time 60 "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then
-		wget -q --timeout=60 -O "$2" "$1"
-	else
-		die "未找到 curl 或 wget，无法下载"
-	fi
-}
-verify_targz() { [ -s "$1" ] && tar -tzf "$1" >/dev/null 2>&1; }
-
-# 智能下载：指定代理 > 内置列表 > 直连，第一个能下且是合法 tar.gz 的就用
-try_download() {  # <github_url> <dest>
+# 公共代理 / 直连兜底（仅在自建源失败后调用）
+fallback_download() {  # <github_url> <dest>
 	_gh="$1"; _dest="$2"
 	if [ -n "$PROXY_OVERRIDE" ]; then
 		_p="${PROXY_OVERRIDE%/}/"
-		log "使用指定镜像: ${_p}"
+		log "使用指定公共代理: ${_p}"
 		fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || true
 		verify_targz "$_dest" && return 0
-		log "指定镜像失败，回落直连"
-		rm -f "$_dest"
+		log "指定代理失败，回落直连"; rm -f "$_dest"
 	elif [ "$NO_PROXY" != "1" ]; then
 		for _p in $DL_PROXIES; do
-			log "尝试镜像: ${_p}"
+			log "尝试公共代理: ${_p}"
 			fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || { rm -f "$_dest"; continue; }
-			verify_targz "$_dest" && { log "下载源: ${_p}"; return 0; }
+			verify_targz "$_dest" && { log "下载源(公共代理): ${_p}"; return 0; }
 			rm -f "$_dest"
 		done
-		log "全部镜像失败，回落直连 GitHub"
+		log "全部公共代理失败，回落直连 GitHub"
 	fi
+	log "直连 GitHub: ${_gh}"
 	fetch_file "$_gh" "$_dest" || return 1
 	verify_targz "$_dest" || { rm -f "$_dest"; return 1; }
+}
+
+download_asset() {  # <dest>
+	_dest="$1"
+	# ① 自建 gh-raw 首选（除非 --no-proxy）
+	if [ "$NO_PROXY" != "1" ]; then
+		for _base in $GHRAW_BASES; do
+			log "尝试自建源: ${_base%/}"
+			fetch_file "${_base%/}/${GHRAW_KEY}/v${VERSION}/${ASSET}" "$_dest" 2>/dev/null || { rm -f "$_dest"; continue; }
+			verify_targz "$_dest" && { log "下载源(自建): ${_base%/}"; return 0; }
+			log "  -> 返回非法包(伪 200?)，跳下一个"; rm -f "$_dest"
+		done
+		log "自建源全部不可用，回落公共代理/直连"
+	fi
+	# ②③ 公共代理 + 直连兜底
+	fallback_download "$GH_URL" "$_dest"
 }
 
 # ---------------------------------------------------------------------------
 # 安装前空间预检（二进制约 20-26MB，小 flash 设备需 extroot）
 # ---------------------------------------------------------------------------
 space_ok() {
-	command -v df >/dev/null 2>&1 || return 0   # 无 df 则不拦
+	command -v df >/dev/null 2>&1 || return 0
 	_avail="$(df -k "$INSTALL_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
-	case "$_avail" in ''|*[!0-9]*) return 0 ;; esac   # 取不到则不拦
+	case "$_avail" in ''|*[!0-9]*) return 0 ;; esac
 	[ "$_avail" -ge 28000 ]
 }
 
@@ -167,7 +235,7 @@ mkdir -p "$TMP"
 trap "rm -rf '$TMP'" EXIT INT TERM
 
 log "下载: ${ASSET}"
-try_download "$GH_URL" "${TMP}/${ASSET}" || die "下载失败（镜像与直连均不可用）。请检查网络后重跑: frpcmgrd-fetch"
+download_asset "${TMP}/${ASSET}" || die "下载失败（自建源 + 公共代理 + 直连均不可用）。请检查网络后重跑: frpcmgrd-fetch"
 
 tar -xzf "${TMP}/${ASSET}" -C "$TMP" || die "解压失败"
 [ -f "${TMP}/${BIN_NAME}" ] || die "安装包中未找到二进制 ${BIN_NAME}"
@@ -177,7 +245,7 @@ mkdir -p "$INSTALL_DIR"
 install -m 0755 "${TMP}/${BIN_NAME}" "${INSTALL_DIR}/.${BIN_NAME}.new"
 mv -f "${INSTALL_DIR}/.${BIN_NAME}.new" "${INSTALL_DIR}/${BIN_NAME}"
 
-# 记录已安装版本，便于 fmc/排查
+# 记录已安装版本，便于排查
 mkdir -p "$LIBDIR"; printf '%s\n' "$VERSION" > "$LIBDIR/INSTALLED" 2>/dev/null || true
 
 log "已安装 ${INSTALL_DIR}/${BIN_NAME} ($("${INSTALL_DIR}/${BIN_NAME}" version 2>/dev/null || echo "version ${VERSION}"))"

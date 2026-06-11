@@ -20,9 +20,15 @@ config frpcmgrd 'main'
 	option self_update '0'
 
 	# --- 以下供 frpcmgrd-fetch 拉取二进制时使用（一般无需改）---
-	# 指定要拉取的二进制版本；留空则用 /usr/lib/frpcmgrd/VERSION（随包版本）
+	# 下载优先级：① 自建 gh-raw 源（首选）② 公共代理（兜底）③ GitHub 直连
+	#
+	# 指定要拉取的二进制版本；留空=随包版本(/usr/lib/frpcmgrd/VERSION)；填 latest=拉最新
 	# option version '1.2.34'
-	# 指定单一下载镜像（跳过内置镜像列表），形如 https://my.mirror/
+	# 指定单一公共代理（跳过内置公共代理列表），形如 https://my.mirror/
 	# option download_proxy ''
-	# 设为 1 则跳过所有镜像直连 GitHub
+	# 设为 1 则跳过自建源 + 公共代理，直连 GitHub
 	option no_proxy '0'
+	# 覆盖内置自建 gh-raw 源域名列表（逗号分隔），一般无需改
+	# option release_proxy_bases 'https://gh-raw.966788.xyz,https://gh-raw.988669.xyz'
+	# 覆盖自建源资源键，一般无需改
+	# option install_proxy_key 'frpc-mgr-releases'
