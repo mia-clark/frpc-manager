@@ -241,8 +241,10 @@ tar -xzf "${TMP}/${ASSET}" -C "$TMP" || die "解压失败"
 [ -f "${TMP}/${BIN_NAME}" ] || die "安装包中未找到二进制 ${BIN_NAME}"
 
 mkdir -p "$INSTALL_DIR"
-# 先装到临时名再原子改名，避免覆盖运行中的二进制导致 text busy
-install -m 0755 "${TMP}/${BIN_NAME}" "${INSTALL_DIR}/.${BIN_NAME}.new"
+# 先装到临时名再原子改名，避免覆盖运行中的二进制导致 text busy。
+# 用 cp+chmod 而非 install：busybox 默认不带 install applet。
+cp "${TMP}/${BIN_NAME}" "${INSTALL_DIR}/.${BIN_NAME}.new"
+chmod 0755 "${INSTALL_DIR}/.${BIN_NAME}.new"
 mv -f "${INSTALL_DIR}/.${BIN_NAME}.new" "${INSTALL_DIR}/${BIN_NAME}"
 
 # 记录已安装版本，便于排查
