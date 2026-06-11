@@ -1,0 +1,183 @@
+#!/bin/sh
+# =============================================================================
+# frpcmgrd-fetch — 识别本机 CPU 架构，从 GitHub Release 拉取对应的 frpcmgrd
+#                  静态二进制并安装到 /usr/bin/frpcmgrd。
+#
+#   由 all 架构 ipk 的 postinst 在安装时调用；也可随时手动重跑（联网更新二进制）。
+#   版本默认读 /usr/lib/frpcmgrd/VERSION（打包时写入）；可用参数或 UCI 覆盖。
+#
+#   用法:
+#     frpcmgrd-fetch                 # 装/重装 VERSION 文件里记录的版本
+#     frpcmgrd-fetch 1.2.34          # 装指定版本
+#     frpcmgrd-fetch --no-proxy      # 跳过镜像直连 GitHub
+#
+#   UCI 可选项 (/etc/config/frpcmgrd main 节):
+#     option version '1.2.34'        # 覆盖默认版本
+#     option download_proxy 'https://my.mirror/'  # 指定单一镜像，跳过内置列表
+#     option no_proxy '1'            # 跳过所有镜像直连
+# =============================================================================
+set -eu
+
+REPO="mia-clark/frpc-manager"
+BIN_NAME="frpcmgrd"
+INSTALL_DIR="/usr/bin"
+LIBDIR="/usr/lib/frpcmgrd"
+
+# GitHub release 下载镜像（公开 4 家在前，自建 6 家在后；与 install.sh 一致）
+DL_PROXIES="
+https://gh-proxy.com/
+https://ghfast.top/
+https://github.tbedu.top/
+https://gh.idayer.com/
+https://docker.srv1.qzz.io/
+https://dk-proxy.srv1.qzz.io/
+https://dk-proxy.966788.xyz/
+https://dk-proxy.srv0.qzz.io/
+https://docker.srv0.qzz.io/
+https://docker.966788.xyz/
+"
+
+log() { logger -t frpcmgrd-fetch "$*" 2>/dev/null; printf '%s\n' "[frpcmgrd-fetch] $*"; }
+die() { printf '%s\n' "[frpcmgrd-fetch][x] $*" >&2; logger -t frpcmgrd-fetch "ERROR: $*" 2>/dev/null; exit 1; }
+
+# ---------------------------------------------------------------------------
+# 解析参数 / UCI，确定版本与代理策略
+# ---------------------------------------------------------------------------
+VERSION=""
+NO_PROXY=0
+PROXY_OVERRIDE=""
+
+for a in "$@"; do
+	case "$a" in
+		--no-proxy) NO_PROXY=1 ;;
+		--proxy=*)  PROXY_OVERRIDE="${a#--proxy=}" ;;
+		-h|--help)  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-*)         die "未知参数: $a" ;;
+		*)          VERSION="$a" ;;
+	esac
+done
+
+# UCI 覆盖（仅在命令行未指定时生效）
+if command -v uci >/dev/null 2>&1; then
+	[ -n "$VERSION" ]        || VERSION="$(uci -q get frpcmgrd.main.version 2>/dev/null || true)"
+	[ -n "$PROXY_OVERRIDE" ] || PROXY_OVERRIDE="$(uci -q get frpcmgrd.main.download_proxy 2>/dev/null || true)"
+	[ "$NO_PROXY" = "1" ] || [ "$(uci -q get frpcmgrd.main.no_proxy 2>/dev/null || echo 0)" != "1" ] || NO_PROXY=1
+fi
+
+# 默认版本读打包时写入的 VERSION 文件
+[ -n "$VERSION" ] || VERSION="$(cat "$LIBDIR/VERSION" 2>/dev/null || true)"
+[ -n "$VERSION" ] || die "无法确定版本：既无参数也无 UCI 也无 $LIBDIR/VERSION"
+VERSION="${VERSION#v}"   # 统一去掉前导 v
+
+# ---------------------------------------------------------------------------
+# 探测本机字节序（mips/mips64 需据此选大小端）
+# ---------------------------------------------------------------------------
+detect_endian() {
+	# od -tx4 按主机字节序把这 4 字节解释成一个整数再打印，故可据此判端序
+	_o="$(printf '\1\2\3\4' | od -An -tx4 2>/dev/null | tr -d ' \n')"
+	case "$_o" in
+		04030201) echo le ;;   # 小端
+		01020304) echo be ;;   # 大端
+		*)        echo le ;;   # od 不可用/格式异常：嵌入式多为小端，默认 le
+	esac
+}
+
+# 把 uname -m 映射到 goreleaser 资产架构 token
+detect_token() {
+	_m="$(uname -m 2>/dev/null || echo unknown)"
+	case "$_m" in
+		x86_64|amd64)              echo amd64 ;;
+		aarch64|arm64)             echo arm64 ;;
+		armv7l|armv7|armhf|arm)    echo armv7 ;;
+		armv6l|armv6)              echo armv6 ;;
+		i386|i486|i586|i686|x86)   echo 386 ;;
+		riscv64)                   echo riscv64 ;;
+		loongarch64|loong64)       echo loong64 ;;
+		mipsel|mipsle)             echo mipsle ;;
+		mips64el|mips64le)         echo mips64le ;;
+		mips)    [ "$(detect_endian)" = "le" ] && echo mipsle  || echo mips ;;
+		mips64)  [ "$(detect_endian)" = "le" ] && echo mips64le || echo mips64 ;;
+		*)       die "不支持的 CPU 架构: $_m" ;;
+	esac
+}
+
+# ---------------------------------------------------------------------------
+# 下载工具与校验
+# ---------------------------------------------------------------------------
+fetch_file() {  # <url> <dest>
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL --max-time 60 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q --timeout=60 -O "$2" "$1"
+	else
+		die "未找到 curl 或 wget，无法下载"
+	fi
+}
+verify_targz() { [ -s "$1" ] && tar -tzf "$1" >/dev/null 2>&1; }
+
+# 智能下载：指定代理 > 内置列表 > 直连，第一个能下且是合法 tar.gz 的就用
+try_download() {  # <github_url> <dest>
+	_gh="$1"; _dest="$2"
+	if [ -n "$PROXY_OVERRIDE" ]; then
+		_p="${PROXY_OVERRIDE%/}/"
+		log "使用指定镜像: ${_p}"
+		fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || true
+		verify_targz "$_dest" && return 0
+		log "指定镜像失败，回落直连"
+		rm -f "$_dest"
+	elif [ "$NO_PROXY" != "1" ]; then
+		for _p in $DL_PROXIES; do
+			log "尝试镜像: ${_p}"
+			fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || { rm -f "$_dest"; continue; }
+			verify_targz "$_dest" && { log "下载源: ${_p}"; return 0; }
+			rm -f "$_dest"
+		done
+		log "全部镜像失败，回落直连 GitHub"
+	fi
+	fetch_file "$_gh" "$_dest" || return 1
+	verify_targz "$_dest" || { rm -f "$_dest"; return 1; }
+}
+
+# ---------------------------------------------------------------------------
+# 安装前空间预检（二进制约 20-26MB，小 flash 设备需 extroot）
+# ---------------------------------------------------------------------------
+space_ok() {
+	command -v df >/dev/null 2>&1 || return 0   # 无 df 则不拦
+	_avail="$(df -k "$INSTALL_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
+	case "$_avail" in ''|*[!0-9]*) return 0 ;; esac   # 取不到则不拦
+	[ "$_avail" -ge 28000 ]
+}
+
+# ---------------------------------------------------------------------------
+# 主流程
+# ---------------------------------------------------------------------------
+TOKEN="$(detect_token)"
+ASSET="${BIN_NAME}_${VERSION}_linux_${TOKEN}.tar.gz"
+GH_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
+
+log "目标版本 ${VERSION} / 架构 ${TOKEN}"
+
+if ! space_ok; then
+	die "安装目录 ${INSTALL_DIR} 可用空间不足（需约 28MB）。请先配置 extroot/USB 外置存储后重试：https://openwrt.org/docs/guide-user/additional-software/extroot_configuration"
+fi
+
+TMP="$(mktemp -d 2>/dev/null || echo /tmp/frpcmgrd-fetch.$$)"
+mkdir -p "$TMP"
+# shellcheck disable=SC2064
+trap "rm -rf '$TMP'" EXIT INT TERM
+
+log "下载: ${ASSET}"
+try_download "$GH_URL" "${TMP}/${ASSET}" || die "下载失败（镜像与直连均不可用）。请检查网络后重跑: frpcmgrd-fetch"
+
+tar -xzf "${TMP}/${ASSET}" -C "$TMP" || die "解压失败"
+[ -f "${TMP}/${BIN_NAME}" ] || die "安装包中未找到二进制 ${BIN_NAME}"
+
+mkdir -p "$INSTALL_DIR"
+# 先装到临时名再原子改名，避免覆盖运行中的二进制导致 text busy
+install -m 0755 "${TMP}/${BIN_NAME}" "${INSTALL_DIR}/.${BIN_NAME}.new"
+mv -f "${INSTALL_DIR}/.${BIN_NAME}.new" "${INSTALL_DIR}/${BIN_NAME}"
+
+# 记录已安装版本，便于 fmc/排查
+mkdir -p "$LIBDIR"; printf '%s\n' "$VERSION" > "$LIBDIR/INSTALLED" 2>/dev/null || true
+
+log "已安装 ${INSTALL_DIR}/${BIN_NAME} ($("${INSTALL_DIR}/${BIN_NAME}" version 2>/dev/null || echo "version ${VERSION}"))"

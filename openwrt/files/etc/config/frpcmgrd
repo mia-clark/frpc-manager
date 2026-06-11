@@ -1,0 +1,28 @@
+config frpcmgrd 'main'
+	# 是否启用服务 (0=禁用，init 脚本将不启动)
+	option enabled '1'
+	# 监听地址，格式 :端口 或 ip:端口
+	option http_addr ':8080'
+	# API 登录令牌 (后台访问凭证)。留空时首次启动自动生成强随机令牌，
+	# 之后用 `uci get frpcmgrd.main.token` 查看。
+	option token ''
+	# 数据根目录 (profiles/logs/stores/meta.json)。必须持久化路径，
+	# 切勿用 /var 或 /tmp (OpenWrt 上为 tmpfs，重启丢失)。
+	option data_dir '/usr/lib/frpcmgrd'
+	# 日志级别: trace|debug|info|warn|error
+	option log_level 'info'
+	# 是否开放 /api/docs 在线文档 (1/0)
+	option docs_enabled '1'
+	# CORS 白名单，逗号分隔或 *
+	option cors_origins '*'
+	# Web 端一键自更新 (1/0)。OpenWrt 上默认 0：自更新会覆盖二进制，
+	# 请改用 frpcmgrd-fetch 或重装 ipk 升级。
+	option self_update '0'
+
+	# --- 以下供 frpcmgrd-fetch 拉取二进制时使用（一般无需改）---
+	# 指定要拉取的二进制版本；留空则用 /usr/lib/frpcmgrd/VERSION（随包版本）
+	# option version '1.2.34'
+	# 指定单一下载镜像（跳过内置镜像列表），形如 https://my.mirror/
+	# option download_proxy ''
+	# 设为 1 则跳过所有镜像直连 GitHub
+	option no_proxy '0'

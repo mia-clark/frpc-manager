@@ -233,6 +233,18 @@ docker compose -f docker-compose.standalone.yml up -d
 FRPCMGR_API_TOKEN=$(openssl rand -hex 32) ./frpcmgrd serve
 ```
 
+### 方式四：OpenWrt 路由器（一个 all ipk，到处装）
+
+到 [Releases](https://github.com/mia-clark/frpc-manager/releases) 下载**唯一**的 `frpcmgrd_<版本>-1_all.ipk`（不分架构），上传到路由器后：
+
+```sh
+opkg install frpcmgrd_<版本>-1_all.ipk
+```
+
+装后自动识别本机 CPU、联网拉对应二进制（内置国内镜像加速）、由 **procd** 守护、配置走 **UCI**（`uci set frpcmgrd.main.token=...`），自动启停与开机自启。改端口/令牌后 `uci commit frpcmgrd && /etc/init.d/frpcmgrd restart`。升级：`frpcmgrd-fetch <新版本>` 或重装新版 all ipk。
+
+> ⚠️ 二进制约 20–26MB，**仅适合 x86 软路由 / 大 NAND 机型 / extroot 外置存储设备**，8/16MB flash 小路由装不下（装时会预检空间并提示）。安装时需能联网拉二进制。OpenWrt 25.12+（默认 apk）暂不直接支持。详见 [openwrt/README.md](openwrt/README.md)。
+
 ---
 
 ## 🧭 安装后怎么用
