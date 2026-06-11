@@ -25,6 +25,7 @@ import {
   ExclamationCircleOutlined,
   DownOutlined,
   ApiOutlined,
+  ExportOutlined,
 } from '@ant-design/icons';
 
 const LIST_COMPACT_KEY = 'frpmgr_configs_compact';
@@ -1244,6 +1245,27 @@ const Configs: React.FC = () => {
                             {
                               title: '运行状态',
                               render: (_, record) => {
+                                // 访客模式：本地绑定一个端口供访问，没有服务端运行态。
+                                // 运行状态列改为「访问」文字按钮：新标签打开 当前协议//当前主机:bindPort。
+                                if (record._kind === 'visitor') {
+                                  if (record.disabled) return <Tag>已禁用</Tag>;
+                                  const bindPort = record.bindPort;
+                                  if (bindPort === undefined || bindPort === null || bindPort === '') return <Tag>—</Tag>;
+                                  const url = `${window.location.protocol}//${window.location.hostname}:${bindPort}`;
+                                  return (
+                                    <Tooltip title={`在新标签打开 ${url}`}>
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        style={{ padding: 0, height: 'auto' }}
+                                        icon={<ExportOutlined />}
+                                        onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+                                      >
+                                        访问
+                                      </Button>
+                                    </Tooltip>
+                                  );
+                                }
                                 const phase = record.status;
                                 if (record.disabled) return <Tag>已禁用</Tag>;
                                 if (phase === 'running') return <Tag color="success">运行中</Tag>;
