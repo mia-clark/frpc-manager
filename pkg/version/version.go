@@ -8,7 +8,7 @@ import (
 // .goreleaser.yml and deploy/Dockerfile). Defaults are placeholders so
 // `go run` works during development.
 var (
-	Number = "1.2.43"
+	Number = "1.2.44"
 	// FRPVersion is the version of FRP used by this program
 	FRPVersion = version.Full()
 	// BuildDate is the day that this program was built
