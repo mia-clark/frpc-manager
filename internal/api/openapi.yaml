@@ -414,6 +414,10 @@ paths:
     post:
       tags: [import-export]
       summary: Import a ZIP backup
+      description: >
+        Restores configs from the archive's *.toml/*.ini/*.conf. If the archive
+        contains meta.json (produced by /export/all), the operator branding is
+        re-applied too; response.branding_restored reports whether it was.
       requestBody:
         required: true
         content:
@@ -422,7 +426,8 @@ paths:
               type: object
               properties:
                 file: { type: string, format: binary }
-      responses: { '200': { description: OK } }
+      responses:
+        '200': { description: 'OK — body { imported: string[], branding_restored: boolean }' }
   /api/v1/configs/{id}/export:
     get:
       tags: [import-export]
@@ -433,6 +438,9 @@ paths:
     get:
       tags: [import-export]
       summary: Download every config as a ZIP
+      description: >
+        ZIP with profiles/*.toml plus meta.json (branding + sort), so the backup
+        is self-contained and /import/zip can restore branding on a new host.
       responses: { '200': { description: OK } }
   /api/v1/nathole/discover:
     post:

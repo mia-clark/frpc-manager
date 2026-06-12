@@ -125,8 +125,18 @@ func (h *ImportExportHandler) ImportZIP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	imported := []string{}
+	var metaRaw []byte
 	for _, zf := range zr.File {
 		name := filepath.Base(zf.Name)
+		// meta.json carries the operator branding (see ExportAll) — capture it
+		// and re-apply after the configs are in place.
+		if name == "meta.json" {
+			if rc, err := zf.Open(); err == nil {
+				metaRaw, _ = io.ReadAll(io.LimitReader(rc, 1<<20))
+				rc.Close()
+			}
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(name))
 		if ext != ".toml" && ext != ".ini" && ext != ".conf" {
 			continue
@@ -147,7 +157,18 @@ func (h *ImportExportHandler) ImportZIP(w http.ResponseWriter, r *http.Request) 
 		}
 		imported = append(imported, id)
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"imported": imported})
+
+	brandingRestored := false
+	if len(metaRaw) > 0 {
+		var err error
+		if brandingRestored, err = h.m.ImportMetaBranding(metaRaw); err != nil {
+			h.log.Warn("restore branding from import failed", slog.Any("err", err))
+		}
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"imported":          imported,
+		"branding_restored": brandingRestored,
+	})
 }
 
 // ExportConfig serves the raw config bytes as a download.
@@ -162,7 +183,9 @@ func (h *ImportExportHandler) ExportConfig(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write(b)
 }
 
-// ExportAll returns a zip archive of every config file plus meta.json.
+// ExportAll returns a zip archive of every config file plus meta.json, so a
+// backup also carries the operator's branding (and display order). Import via
+// /import/zip restores the configs and re-applies the branding.
 func (h *ImportExportHandler) ExportAll(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frpmgr-export-%s.zip"`, time.Now().UTC().Format("20060102-150405")))
@@ -185,6 +208,14 @@ func (h *ImportExportHandler) ExportAll(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		_, _ = fw.Write(raw)
+	}
+
+	// Bundle meta.json (branding / sort) so the backup is self-contained. Best
+	// effort: a missing/unreadable meta.json just yields a config-only archive.
+	if metaRaw, err := os.ReadFile(h.m.MetaPath()); err == nil {
+		if fw, err := zw.Create("meta.json"); err == nil {
+			_, _ = fw.Write(metaRaw)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -389,6 +390,10 @@ func (m *Manager) Reorder(order []string) error {
 // ProfilesDir reports the directory the manager owns.
 func (m *Manager) ProfilesDir() string { return m.opts.ProfilesDir }
 
+// MetaPath reports the on-disk path of meta.json (branding, sort, …). Used by
+// the export endpoint so a backup carries the operator's branding too.
+func (m *Manager) MetaPath() string { return m.opts.MetaPath }
+
 // CombinedLogPath 返回所有 frpc 实例共用的合并日志文件的绝对路径。
 func (m *Manager) CombinedLogPath() string {
 	return filepath.Join(m.opts.LogsDir, CombinedLogFileName)
@@ -526,6 +531,31 @@ func (m *Manager) SetBranding(in Branding) (Branding, error) {
 		return Branding{}, err
 	}
 	return in.Effective(), nil
+}
+
+// ImportMetaBranding parses a meta.json blob (from an /export/all backup) and
+// restores the operator branding from it. It deliberately ignores sort /
+// log_view_since / auto_start: a config-restore must not silently reorder the
+// instance list or hide logs — branding is the durable identity users want to
+// keep across reinstalls. Returns true when a non-empty branding was applied.
+func (m *Manager) ImportMetaBranding(raw []byte) (bool, error) {
+	var meta Meta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return false, err
+	}
+	if meta.Branding == nil {
+		return false, nil
+	}
+	b := *meta.Branding
+	if strings.TrimSpace(b.AppName) == "" &&
+		strings.TrimSpace(b.AppSubtitle) == "" &&
+		strings.TrimSpace(b.HTMLTitle) == "" {
+		return false, nil
+	}
+	if _, err := m.SetBranding(b); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // truncateRunes caps s to at most max runes (not bytes), so multi-byte CJK
