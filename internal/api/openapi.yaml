@@ -106,6 +106,16 @@ paths:
         '400': { description: Deployment does not support self-update }
         '409': { description: Already up to date (without force) }
         '502': { description: Could not query the latest release }
+  /api/v1/system/update/log:
+    get:
+      tags: [system]
+      summary: Read the current self-update log
+      description: >
+        Returns the tail of update.log so the web UI can stream the live update
+        steps (download / extract / install / restart). Reset to a fresh header
+        each time POST /system/update starts. body { content: string }.
+      responses:
+        '200': { description: 'OK — body { content: string }' }
   /api/v1/configs:
     get:
       tags: [configs]

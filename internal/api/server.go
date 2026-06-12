@@ -63,6 +63,7 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/api/v1/version", sys.Version)
 		r.Get("/api/v1/version/check", upd.Check)
 		r.Post("/api/v1/system/update", upd.Update)
+		r.Get("/api/v1/system/update/log", upd.Log)
 
 		r.Put("/api/v1/ui/branding", ui.UpdateBranding)
 
