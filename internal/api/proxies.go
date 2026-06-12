@@ -3,10 +3,45 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"sort"
 
 	"github.com/mia-clark/frpc-manager/internal/manager"
 	"github.com/mia-clark/frpc-manager/pkg/config"
 )
+
+// withProxies returns a copy of src with its proxy list replaced. Every other
+// field (ClientCommon, LogFile, ManualStart, …) is preserved.
+//
+// Each *Proxy is cloned so the result is fully decoupled from the live pointers
+// Get() handed back: manager.Update -> writeConfig calls ClientConfig.Complete,
+// which mutates each proxy in place (*p = pruned). Reusing the instance's live
+// objects would let a write-failure path leave the in-memory state altered
+// without a reload. Cloning mirrors how Create/Update go through fresh fromV1
+// objects, keeping these batch endpoints just as safe.
+func withProxies(src *config.ClientConfig, proxies []*config.Proxy) *config.ClientConfig {
+	cp := *src
+	cloned := make([]*config.Proxy, len(proxies))
+	for i, p := range proxies {
+		np := *p
+		cloned[i] = &np
+	}
+	cp.Proxies = cloned
+	return &cp
+}
+
+// proxyMatches reports whether p is targeted by name (its primary Name or, for
+// range proxies, any expanded alias) according to the want set.
+func proxyMatches(p *config.Proxy, want map[string]struct{}) bool {
+	if _, ok := want[p.Name]; ok {
+		return true
+	}
+	for _, a := range p.GetAlias() {
+		if _, ok := want[a]; ok {
+			return true
+		}
+	}
+	return false
+}
 
 func proxyName(p config.TypedProxyConfig) string {
 	if p.ProxyConfigurer == nil {
@@ -223,4 +258,177 @@ func (h *ProxiesHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteError(w, http.StatusNotFound, CodeProxyNotFound, "proxy not found", nil)
+}
+
+// Reorder persists the user's chosen display order for proxies/visitors.
+// The body carries the full ordered list of names; the in-memory combined
+// proxy slice is re-sorted to match (one Update -> one hot-reload). Names not
+// present in the list keep their current relative order at the end, so a
+// stale/partial order never drops a proxy.
+func (h *ProxiesHandler) Reorder(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	var body struct {
+		Order []string `json:"order"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	_, data, err := h.m.Get(id, false)
+	if writeManagerError(w, err) {
+		return
+	}
+	rank := make(map[string]int, len(body.Order))
+	for i, n := range body.Order {
+		if _, ok := rank[n]; !ok {
+			rank[n] = i
+		}
+	}
+	rankOf := func(p *config.Proxy) int {
+		if v, ok := rank[p.Name]; ok {
+			return v
+		}
+		for _, a := range p.GetAlias() {
+			if v, ok := rank[a]; ok {
+				return v
+			}
+		}
+		return len(body.Order) + 1 // unranked -> after everything, original order kept
+	}
+	next := make([]*config.Proxy, len(data.Proxies))
+	copy(next, data.Proxies)
+	sort.SliceStable(next, func(a, b int) bool {
+		return rankOf(next[a]) < rankOf(next[b])
+	})
+	if err := h.m.Update(id, withProxies(data, next)); writeManagerError(w, err) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// BatchDelete removes every named proxy/visitor in one shot (one Update ->
+// one hot-reload, instead of N deletes each triggering a reload).
+func (h *ProxiesHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	var body struct {
+		Names []string `json:"names"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if len(body.Names) == 0 {
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "names is required", nil)
+		return
+	}
+	_, data, err := h.m.Get(id, false)
+	if writeManagerError(w, err) {
+		return
+	}
+	want := make(map[string]struct{}, len(body.Names))
+	for _, n := range body.Names {
+		want[n] = struct{}{}
+	}
+	next := make([]*config.Proxy, 0, len(data.Proxies))
+	removed := 0
+	for _, p := range data.Proxies {
+		if proxyMatches(p, want) {
+			removed++
+			continue
+		}
+		next = append(next, p)
+	}
+	if removed == 0 {
+		WriteError(w, http.StatusNotFound, CodeProxyNotFound, "no matching proxies", nil)
+		return
+	}
+	if err := h.m.Update(id, withProxies(data, next)); writeManagerError(w, err) {
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"deleted": removed})
+}
+
+// moveReq is the wire payload for POST /proxies/move.
+type moveReq struct {
+	TargetID string   `json:"target_id"`
+	Names    []string `json:"names"`
+}
+
+// Move relocates the named proxies/visitors from this config to target_id.
+// The destination is updated first (adding) and the source second (removing),
+// so a failure mid-way can only leave duplicates — never lose a proxy.
+func (h *ProxiesHandler) Move(w http.ResponseWriter, r *http.Request) {
+	srcID := pathID(r)
+	var req moveReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	switch {
+	case req.TargetID == "":
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "target_id is required", nil)
+		return
+	case len(req.Names) == 0:
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "names is required", nil)
+		return
+	case req.TargetID == srcID:
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "target_id must differ from source", nil)
+		return
+	}
+	_, srcData, err := h.m.Get(srcID, false)
+	if writeManagerError(w, err) {
+		return
+	}
+	_, dstData, err := h.m.Get(req.TargetID, false)
+	if writeManagerError(w, err) {
+		return
+	}
+	want := make(map[string]struct{}, len(req.Names))
+	for _, n := range req.Names {
+		want[n] = struct{}{}
+	}
+	var moved []*config.Proxy
+	remain := make([]*config.Proxy, 0, len(srcData.Proxies))
+	for _, p := range srcData.Proxies {
+		if proxyMatches(p, want) {
+			moved = append(moved, p)
+		} else {
+			remain = append(remain, p)
+		}
+	}
+	if len(moved) == 0 {
+		WriteError(w, http.StatusNotFound, CodeProxyNotFound, "no matching proxies in source", nil)
+		return
+	}
+	// reject if any moved name already exists in the destination
+	existing := make(map[string]struct{}, len(dstData.Proxies))
+	for _, p := range dstData.Proxies {
+		existing[p.Name] = struct{}{}
+	}
+	var conflicts []string
+	for _, p := range moved {
+		if _, ok := existing[p.Name]; ok {
+			conflicts = append(conflicts, p.Name)
+		}
+	}
+	if len(conflicts) > 0 {
+		WriteError(w, http.StatusConflict, CodeProxyExists, "name already exists in target config",
+			map[string]any{"names": conflicts})
+		return
+	}
+	// withProxies clones every *Proxy, so the two configs never share pointers
+	// even though we hand the same `moved` objects to the destination here.
+	dstNext := make([]*config.Proxy, 0, len(dstData.Proxies)+len(moved))
+	dstNext = append(dstNext, dstData.Proxies...)
+	dstNext = append(dstNext, moved...)
+
+	if err := h.m.Update(req.TargetID, withProxies(dstData, dstNext)); writeManagerError(w, err) {
+		return
+	}
+	if err := h.m.Update(srcID, withProxies(srcData, remain)); err != nil {
+		// destination already holds the proxies; surface the half-done state
+		// rather than silently dropping them from the source.
+		WriteError(w, http.StatusInternalServerError, CodeInternal,
+			"moved to target but failed to remove from source: "+err.Error(),
+			map[string]any{"target_id": req.TargetID, "moved": len(moved)})
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"moved": len(moved)})
 }

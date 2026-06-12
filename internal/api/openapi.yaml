@@ -202,6 +202,68 @@ paths:
       summary: Add proxy or visitor
       parameters: [ { in: path, name: id, required: true, schema: { type: string } } ]
       responses: { '201': { description: Created } }
+  /api/v1/configs/{id}/proxies/reorder:
+    post:
+      tags: [proxies]
+      summary: Reorder proxies/visitors (persist display order)
+      description: >
+        Re-sort the config's combined proxy/visitor list to match the supplied
+        full ordered list of names. Names absent from the list keep their current
+        relative position at the end, so a stale order never drops a proxy.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order: { type: array, items: { type: string } }
+      responses: { '204': { description: OK }, '404': { description: Config not found } }
+  /api/v1/configs/{id}/proxies/batch-delete:
+    post:
+      tags: [proxies]
+      summary: Delete multiple proxies/visitors in one request
+      description: One Update (single hot-reload) instead of N individual deletes.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [names]
+              properties:
+                names: { type: array, items: { type: string } }
+      responses:
+        '200': { description: 'OK — body { deleted: integer }' }
+        '400': { description: names is required }
+        '404': { description: No matching proxies }
+  /api/v1/configs/{id}/proxies/move:
+    post:
+      tags: [proxies]
+      summary: Move proxies/visitors to another config (atomic)
+      description: >
+        Relocate the named proxies/visitors from this config to target_id. The
+        destination is written first (adding), the source second (removing), so a
+        mid-way failure can only leave duplicates — never lose a proxy.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_id, names]
+              properties:
+                target_id: { type: string }
+                names: { type: array, items: { type: string } }
+      responses:
+        '200': { description: 'OK — body { moved: integer }' }
+        '400': { description: Missing/invalid params (e.g. target equals source) }
+        '404': { description: Source/target config not found, or no matching proxies }
+        '409': { description: 'Name already exists in target — details.names lists the clashes' }
   /api/v1/configs/{id}/proxies/{name}:
     get:
       tags: [proxies]

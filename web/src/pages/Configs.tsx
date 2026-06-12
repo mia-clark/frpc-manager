@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import type { ComponentProps } from 'react';
+import type { ComponentProps, DragEvent } from 'react';
 import {
   Card, Row, Col, Button, Badge, Space, Typography, Popconfirm,
   Tabs, Form, Input, InputNumber, Switch, Table, Drawer, Modal,
@@ -25,7 +25,8 @@ import {
   ExclamationCircleOutlined,
   DownOutlined,
   ApiOutlined,
-  ExportOutlined,
+  HolderOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 
 const LIST_COMPACT_KEY = 'frpmgr_configs_compact';
@@ -96,6 +97,14 @@ const Configs: React.FC = () => {
   const [proxyDrawerOpen, setProxyDrawerOpen] = useState<boolean>(false);
   const [editingProxy, setEditingProxy] = useState<any>(null);
 
+  // 代理列表：多选 + 拖拽排序 + 批量迁移
+  const [selectedProxyKeys, setSelectedProxyKeys] = useState<string[]>([]);
+  const [migrateModalOpen, setMigrateModalOpen] = useState<boolean>(false);
+  const [migrateTargetId, setMigrateTargetId] = useState<string>('');
+  const [migrating, setMigrating] = useState<boolean>(false);
+  const dragIndexRef = useRef<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
   // 迷你日志状态（最近 1000 行 + 实时 WebSocket 推送 + 自动滚底）
   const MINI_LOGS_MAX = 1000;
   const [miniLogLines, setMiniLogLines] = useState<string[]>([]);
@@ -135,6 +144,13 @@ const Configs: React.FC = () => {
       handleLoadConfigDetails(activeConfigId);
     }
   }, [activeConfigId, activeTab]);
+
+  // 切换实例时清空多选与迁移态，避免把 A 实例的勾选/迁移目标带到 B
+  useEffect(() => {
+    setSelectedProxyKeys([]);
+    setMigrateModalOpen(false);
+    setMigrateTargetId('');
+  }, [activeConfigId]);
 
   const fetchConfigs = async () => {
     try {
@@ -409,6 +425,9 @@ const Configs: React.FC = () => {
         return { _kind: 'proxy', ...(proxyByName.get(snap.name) || {}), ...snap };
       });
       setProxies(merged);
+      // 选区对账：剔除已不在最新列表中的幽灵 key（外部/异步刷新把选中规则删除/
+      // 迁移/改名后残留），避免批量工具条计数偏大或把不存在的名字发给后端而失败。
+      setSelectedProxyKeys((prev) => prev.filter((k) => merged.some((p) => p.name === k)));
     } catch (err) {
       setProxies([]);
     } finally {
@@ -435,6 +454,79 @@ const Configs: React.FC = () => {
       loadProxies(activeConfigId);
     } catch (err) {
       message.error('删除代理失败');
+    }
+  };
+
+  // 拖拽排序：仅当从行首手柄发起（dragIndexRef 已被 onDragStart 置位）才生效，
+  // 其他区域不触发，避免误操作。先乐观更新本地顺序，再把完整顺序持久化到后端
+  // （后端一次 Update→一次热重载）；失败回滚重载。
+  const handleProxyDrop = async (dropIndex: number) => {
+    const from = dragIndexRef.current;
+    dragIndexRef.current = null;
+    setDragOverIndex(null);
+    if (from === null || from === dropIndex) return;
+    const next = [...proxies];
+    const [moved] = next.splice(from, 1);
+    next.splice(dropIndex, 0, moved);
+    setProxies(next);
+    try {
+      await client.post(`/api/v1/configs/${activeConfigId}/proxies/reorder`, {
+        order: next.map((p) => p.name),
+      });
+    } catch {
+      message.error('排序保存失败，已回滚');
+      loadProxies(activeConfigId);
+    }
+  };
+
+  // 批量删除选中的代理 / 访客（一次请求，后端原子删除 + 单次热重载）
+  const handleBatchDelete = async () => {
+    if (selectedProxyKeys.length === 0) return;
+    try {
+      const resp = await client.post(`/api/v1/configs/${activeConfigId}/proxies/batch-delete`, {
+        names: selectedProxyKeys,
+      });
+      message.success(`已删除 ${resp.data?.deleted ?? selectedProxyKeys.length} 条规则`);
+      setSelectedProxyKeys([]);
+      loadProxies(activeConfigId);
+    } catch {
+      message.error('批量删除失败');
+    }
+  };
+
+  // 批量迁移选中规则到另一个 FRPS 实例（后端原子搬移：先加目标、后删来源）
+  const handleMigrate = async () => {
+    if (!migrateTargetId || selectedProxyKeys.length === 0) return;
+    setMigrating(true);
+    try {
+      const resp = await client.post(`/api/v1/configs/${activeConfigId}/proxies/move`, {
+        target_id: migrateTargetId,
+        names: selectedProxyKeys,
+      });
+      message.success(`已迁移 ${resp.data?.moved ?? selectedProxyKeys.length} 条规则`);
+      setMigrateModalOpen(false);
+      setMigrateTargetId('');
+      setSelectedProxyKeys([]);
+      loadProxies(activeConfigId);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const code = err?.response?.data?.error?.code;
+      const details = err?.response?.data?.error?.details;
+      if (code === 'proxy_already_exists' && Array.isArray(details?.names)) {
+        message.error(`目标实例已存在同名规则：${details.names.join('、')}`);
+      } else if (status === 500 && details?.moved) {
+        // 半完成：目标已写入但来源未删除。提示用户去目标核对、删当前实例的重复，
+        // 并收尾本侧 UI（刷新会通过选区对账剔除已迁走的行）。
+        message.warning('已写入目标实例，但未能从当前实例移除，请到目标实例核对并删除当前实例的重复规则');
+        setMigrateModalOpen(false);
+        setMigrateTargetId('');
+        setSelectedProxyKeys([]);
+        loadProxies(activeConfigId);
+      } else {
+        message.error('迁移失败');
+      }
+    } finally {
+      setMigrating(false);
     }
   };
 
@@ -1185,6 +1277,38 @@ const Configs: React.FC = () => {
                             </Dropdown>
                           </Space>
                         </div>
+                        {selectedProxyKeys.length > 0 && (
+                          <div style={{
+                            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
+                            padding: '8px 12px', borderRadius: 8,
+                            background: 'rgba(22,119,255,0.08)',
+                          }}>
+                            <Text>已选 <Text strong>{selectedProxyKeys.length}</Text> 项</Text>
+                            <Tooltip title={configs.filter((c) => c.id !== activeConfigId).length === 0 ? '暂无其他实例可迁移' : ''}>
+                              <Button
+                                size="small"
+                                icon={<SwapOutlined />}
+                                disabled={configs.filter((c) => c.id !== activeConfigId).length === 0}
+                                onClick={() => setMigrateModalOpen(true)}
+                              >
+                                迁移到…
+                              </Button>
+                            </Tooltip>
+                            <Popconfirm
+                              title={`确定删除选中的 ${selectedProxyKeys.length} 条规则？`}
+                              description="删除后无法恢复。"
+                              onConfirm={handleBatchDelete}
+                              okText="删除"
+                              cancelText="取消"
+                              okButtonProps={{ danger: true }}
+                            >
+                              <Button size="small" danger icon={<DeleteOutlined />}>批量删除</Button>
+                            </Popconfirm>
+                            <Button size="small" type="text" onClick={() => setSelectedProxyKeys([])}>
+                              取消选择
+                            </Button>
+                          </div>
+                        )}
                         <Table
                           dataSource={proxies}
                           loading={proxiesLoading}
@@ -1193,7 +1317,48 @@ const Configs: React.FC = () => {
                           pagination={false}
                           style={{ background: 'transparent' }}
                           className="custom-table"
+                          rowSelection={{
+                            selectedRowKeys: selectedProxyKeys,
+                            onChange: (keys) => setSelectedProxyKeys(keys as string[]),
+                          }}
+                          onRow={(_, index) => ({
+                            onDragOver: (e: DragEvent<HTMLTableRowElement>) => {
+                              if (dragIndexRef.current === null || index === undefined) return;
+                              e.preventDefault();
+                              if (dragOverIndex !== index) setDragOverIndex(index);
+                            },
+                            onDrop: (e: DragEvent<HTMLTableRowElement>) => {
+                              if (index === undefined) return;
+                              e.preventDefault();
+                              handleProxyDrop(index);
+                            },
+                            style: dragOverIndex === index
+                              ? { background: 'rgba(22,119,255,0.12)' }
+                              : undefined,
+                          })}
                           columns={[
+                            {
+                              title: '',
+                              key: '_drag',
+                              width: 36,
+                              render: (_, __, index) => (
+                                <span
+                                  title="拖动此处可上下排序"
+                                  style={{ cursor: 'grab', color: 'var(--ant-color-text-quaternary, #bbb)', display: 'inline-flex', padding: '0 2px' }}
+                                  draggable
+                                  onDragStart={(e: DragEvent<HTMLSpanElement>) => {
+                                    dragIndexRef.current = index;
+                                    e.dataTransfer.effectAllowed = 'move';
+                                  }}
+                                  onDragEnd={() => {
+                                    dragIndexRef.current = null;
+                                    setDragOverIndex(null);
+                                  }}
+                                >
+                                  <HolderOutlined />
+                                </span>
+                              ),
+                            },
                             {
                               title: '名称',
                               dataIndex: 'name',
@@ -1259,7 +1424,6 @@ const Configs: React.FC = () => {
                                         type="link"
                                         size="small"
                                         style={{ padding: 0, height: 'auto' }}
-                                        icon={<ExportOutlined />}
                                         onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
                                       >
                                         访问
@@ -2210,6 +2374,34 @@ const Configs: React.FC = () => {
           </Form.Item>
         </Form>
       </Drawer>
+
+      {/* 批量迁移规则到其他 FRPS 实例 */}
+      <Modal
+        title="迁移规则到其他实例"
+        open={migrateModalOpen}
+        onCancel={() => { setMigrateModalOpen(false); setMigrateTargetId(''); }}
+        onOk={handleMigrate}
+        okText="迁移"
+        cancelText="取消"
+        okButtonProps={{ disabled: !migrateTargetId, loading: migrating }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Text>
+            将选中的 <Text strong>{selectedProxyKeys.length}</Text> 条规则从当前实例
+            搬移到目标实例（原子操作：先写入目标、再从当前移除，名称冲突会整体中止）。
+          </Text>
+          <Select
+            style={{ width: '100%' }}
+            placeholder="选择目标 FRPS 实例"
+            value={migrateTargetId || undefined}
+            onChange={setMigrateTargetId}
+            options={configs
+              .filter((c) => c.id !== activeConfigId)
+              .map((c) => ({ value: c.id, label: c.name || c.id }))}
+            notFoundContent="没有其他可迁移的实例"
+          />
+        </Space>
+      </Modal>
     </div>
   );
 };

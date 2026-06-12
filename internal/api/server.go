@@ -79,6 +79,9 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Get("/api/v1/configs/{id}/proxies", proxies.List)
 		r.Post("/api/v1/configs/{id}/proxies", proxies.Create)
+		r.Post("/api/v1/configs/{id}/proxies/reorder", proxies.Reorder)
+		r.Post("/api/v1/configs/{id}/proxies/batch-delete", proxies.BatchDelete)
+		r.Post("/api/v1/configs/{id}/proxies/move", proxies.Move)
 		r.Get("/api/v1/configs/{id}/proxies/{name}", proxies.Get)
 		r.Put("/api/v1/configs/{id}/proxies/{name}", proxies.Update)
 		r.Delete("/api/v1/configs/{id}/proxies/{name}", proxies.Delete)
