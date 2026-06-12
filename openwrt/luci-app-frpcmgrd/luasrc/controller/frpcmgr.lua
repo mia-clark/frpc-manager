@@ -119,7 +119,7 @@ function action_download_status()
 	if has then ver = util.trim(sys.exec(util.shellquote(BIN) .. " version 2>/dev/null")) end
 	local logtail = ""
 	if fs.access(DL_LOG) then
-		logtail = sys.exec("tail -n 30 " .. util.shellquote(DL_LOG) .. " 2>/dev/null")
+		logtail = sys.exec("tail -n 200 " .. util.shellquote(DL_LOG) .. " 2>/dev/null")
 	end
 	http.write_json({
 		running    = fs.access(DL_LOCK) and true or false,

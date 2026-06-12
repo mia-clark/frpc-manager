@@ -92,13 +92,49 @@ fi
 # ---------------------------------------------------------------------------
 # 下载工具
 # ---------------------------------------------------------------------------
+# 人类可读体积（纯整数运算，busybox 无 bc）
+human() {  # <bytes>
+	_b="${1:-0}"; case "$_b" in ''|*[!0-9]*) _b=0 ;; esac
+	if   [ "$_b" -ge 1048576 ]; then printf '%d.%d MB' "$(( _b / 1048576 ))" "$(( _b % 1048576 * 10 / 1048576 ))"
+	elif [ "$_b" -ge 1024 ];    then printf '%d KB' "$(( _b / 1024 ))"
+	else printf '%d B' "$_b"; fi
+}
+file_size() { wc -c < "$1" 2>/dev/null | tr -d ' \n' || printf 0; }
+epoch() { date +%s 2>/dev/null || printf 0; }
+
+# 实际下载（curl/wget），由 fetch_file 放后台调用
+_dl_raw() {  # <url> <dest>
+	if   command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 180 "$1" -o "$2"
+	elif command -v wget >/dev/null 2>&1; then wget -q --timeout=180 -O "$2" "$1"
+	else return 127; fi
+}
+
+# 下载 <url> 到 <dest>：后台跑下载 + 轮询体积打印进度（与下载工具无关，busybox 通用）。
+# 进度行缩进两级，便于在日志里和阶段标记区分。
 fetch_file() {  # <url> <dest>
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 60 "$1" -o "$2"
-	elif command -v wget >/dev/null 2>&1; then wget -q --timeout=60 -O "$2" "$1"
-	else die "未找到 curl 或 wget，无法下载"; fi
+	command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || die "未找到 curl 或 wget，无法下载"
+	: > "$2" 2>/dev/null || true
+	_dl_raw "$1" "$2" &
+	_pid=$!
+	_t0="$(epoch)"; _mark=0
+	while kill -0 "$_pid" 2>/dev/null; do
+		_sz="$(file_size "$2")"
+		if [ "$(( _sz - _mark ))" -ge 524288 ]; then   # 每累计增长 ≥512KB 打一行
+			_dt=$(( $(epoch) - _t0 )); [ "$_dt" -lt 1 ] && _dt=1
+			log "      ↓ 已下载 $(human "$_sz")  （$(human "$(( _sz / _dt ))")/s）"
+			_mark="$_sz"
+		fi
+		sleep 1
+	done
+	_rc=0; wait "$_pid" || _rc=$?
+	if [ "$_rc" = "0" ]; then
+		_sz="$(file_size "$2")"; _dt=$(( $(epoch) - _t0 )); [ "$_dt" -lt 1 ] && _dt=1
+		log "      ✓ 传输完成 $(human "$_sz")，用时 ${_dt}s（均速 $(human "$(( _sz / _dt ))")/s）"
+	fi
+	return "$_rc"
 }
 fetch_stdout() {  # <url>
-	if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1"
+	if   command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 15 "$1"
 	elif command -v wget >/dev/null 2>&1; then wget -qO- --timeout=15 "$1"
 	else return 1; fi
 }
@@ -125,14 +161,22 @@ resolve_latest() {
 	printf '%s' "${_tag#v}"
 }
 
+log "════════════ frpcmgrd 核心拉取 ════════════"
+log "[1/4] 解析版本"
 # 默认版本读打包时写入的 VERSION 文件
-[ -n "$VERSION" ] || VERSION="$(cat "$LIBDIR/VERSION" 2>/dev/null || true)"
+_vsrc="参数 / UCI 指定"
+if [ -z "$VERSION" ]; then
+	VERSION="$(cat "$LIBDIR/VERSION" 2>/dev/null || true)"
+	_vsrc="随包 ${LIBDIR}/VERSION"
+fi
 if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
-	log "查询最新版本..."
+	log "  查询最新版本（先自建源 ${GHRAW_KEY}/latest，失败回落 GitHub API）..."
 	VERSION="$(resolve_latest)"
 	[ -n "$VERSION" ] || die "无法获取最新版本（自建源与 GitHub API 均不可用）。请用 frpcmgrd-fetch <版本> 指定"
+	_vsrc="latest 在线解析"
 fi
 VERSION="${VERSION#v}"   # 统一去掉前导 v
+log "  目标版本: ${VERSION}  （来源: ${_vsrc}）"
 
 # ---------------------------------------------------------------------------
 # 架构探测
@@ -172,22 +216,23 @@ fallback_download() {  # <github_url> <dest>
 	_gh="$1"; _dest="$2"
 	if [ -n "$PROXY_OVERRIDE" ]; then
 		_p="${PROXY_OVERRIDE%/}/"
-		log "使用指定公共代理: ${_p}"
+		log "  · 使用指定公共代理: ${_p}${_gh}"
 		fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || true
-		verify_targz "$_dest" && return 0
-		log "指定代理失败，回落直连"; rm -f "$_dest"
+		verify_targz "$_dest" && { log "  ✓ 命中指定代理"; return 0; }
+		log "    ✗ 指定代理失败，回落直连"; rm -f "$_dest"
 	elif [ "$NO_PROXY" != "1" ]; then
 		for _p in $DL_PROXIES; do
-			log "尝试公共代理: ${_p}"
-			fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || { rm -f "$_dest"; continue; }
-			verify_targz "$_dest" && { log "下载源(公共代理): ${_p}"; return 0; }
-			rm -f "$_dest"
+			log "  · 尝试公共代理: ${_p}${_gh}"
+			fetch_file "${_p}${_gh}" "$_dest" 2>/dev/null || { log "    ✗ 连接失败/超时"; rm -f "$_dest"; continue; }
+			verify_targz "$_dest" && { log "  ✓ 命中公共代理: ${_p}"; return 0; }
+			log "    ✗ 返回非法包，跳下一个"; rm -f "$_dest"
 		done
-		log "全部公共代理失败，回落直连 GitHub"
+		log "  全部公共代理失败，回落直连 GitHub"
 	fi
-	log "直连 GitHub: ${_gh}"
+	log "  · 直连 GitHub: ${_gh}"
 	fetch_file "$_gh" "$_dest" || return 1
 	verify_targz "$_dest" || { rm -f "$_dest"; return 1; }
+	log "  ✓ 命中 GitHub 直连"
 }
 
 download_asset() {  # <dest>
@@ -195,12 +240,13 @@ download_asset() {  # <dest>
 	# ① 自建 gh-raw 首选（除非 --no-proxy）
 	if [ "$NO_PROXY" != "1" ]; then
 		for _base in $GHRAW_BASES; do
-			log "尝试自建源: ${_base%/}"
-			fetch_file "${_base%/}/${GHRAW_KEY}/v${VERSION}/${ASSET}" "$_dest" 2>/dev/null || { rm -f "$_dest"; continue; }
-			verify_targz "$_dest" && { log "下载源(自建): ${_base%/}"; return 0; }
-			log "  -> 返回非法包(伪 200?)，跳下一个"; rm -f "$_dest"
+			_url="${_base%/}/${GHRAW_KEY}/v${VERSION}/${ASSET}"
+			log "  · 尝试自建源: ${_url}"
+			fetch_file "$_url" "$_dest" 2>/dev/null || { log "    ✗ 连接失败/超时"; rm -f "$_dest"; continue; }
+			verify_targz "$_dest" && { log "  ✓ 命中自建源: ${_url}"; return 0; }
+			log "    ✗ 返回非法包(伪 200?)，跳下一个"; rm -f "$_dest"
 		done
-		log "自建源全部不可用，回落公共代理/直连"
+		log "  自建源全部不可用，回落公共代理 / 直连"
 	fi
 	# ②③ 公共代理 + 直连兜底
 	fallback_download "$GH_URL" "$_dest"
@@ -219,11 +265,15 @@ space_ok() {
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+log "[2/4] 探测 CPU 架构"
 TOKEN="$(detect_token)"
 ASSET="${BIN_NAME}_${VERSION}_linux_${TOKEN}.tar.gz"
 GH_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
-
-log "目标版本 ${VERSION} / 架构 ${TOKEN}"
+log "  CPU: $(uname -m 2>/dev/null || echo unknown)  →  资产架构 ${TOKEN}"
+log "  资产文件: ${ASSET}"
+log "  GitHub 直链: ${GH_URL}"
+log "  安装路径: ${INSTALL_DIR}/${BIN_NAME}"
+log "  数据目录: ${LIBDIR}"
 
 if ! space_ok; then
 	die "安装目录 ${INSTALL_DIR} 可用空间不足（需约 28MB）。请先配置 extroot/USB 外置存储后重试：https://openwrt.org/docs/guide-user/additional-software/extroot_configuration"
@@ -234,15 +284,20 @@ mkdir -p "$TMP"
 # shellcheck disable=SC2064
 trap "rm -rf '$TMP'" EXIT INT TERM
 
-log "下载: ${ASSET}"
+log "[3/4] 下载核心（二进制约 6–8 MB；网络慢时请耐心等待下方进度）"
+log "  临时目录: ${TMP}"
+log "  落地文件: ${TMP}/${ASSET}"
 download_asset "${TMP}/${ASSET}" || die "下载失败（自建源 + 公共代理 + 直连均不可用）。请检查网络后重跑: frpcmgrd-fetch"
 
+log "[4/4] 校验、解压并安装"
+log "  解压: ${TMP}/${ASSET}  →  ${TMP}/"
 tar -xzf "${TMP}/${ASSET}" -C "$TMP" || die "解压失败"
 [ -f "${TMP}/${BIN_NAME}" ] || die "安装包中未找到二进制 ${BIN_NAME}"
 
-mkdir -p "$INSTALL_DIR"
 # 先装到临时名再原子改名，避免覆盖运行中的二进制导致 text busy。
 # 用 cp+chmod 而非 install：busybox 默认不带 install applet。
+log "  原子安装: ${TMP}/${BIN_NAME}  →  ${INSTALL_DIR}/${BIN_NAME}"
+mkdir -p "$INSTALL_DIR"
 cp "${TMP}/${BIN_NAME}" "${INSTALL_DIR}/.${BIN_NAME}.new"
 chmod 0755 "${INSTALL_DIR}/.${BIN_NAME}.new"
 mv -f "${INSTALL_DIR}/.${BIN_NAME}.new" "${INSTALL_DIR}/${BIN_NAME}"
@@ -250,4 +305,6 @@ mv -f "${INSTALL_DIR}/.${BIN_NAME}.new" "${INSTALL_DIR}/${BIN_NAME}"
 # 记录已安装版本，便于排查
 mkdir -p "$LIBDIR"; printf '%s\n' "$VERSION" > "$LIBDIR/INSTALLED" 2>/dev/null || true
 
-log "已安装 ${INSTALL_DIR}/${BIN_NAME} ($("${INSTALL_DIR}/${BIN_NAME}" version 2>/dev/null || echo "version ${VERSION}"))"
+log "  ✓ 已安装: ${INSTALL_DIR}/${BIN_NAME}"
+log "  ✓ 版本: $("${INSTALL_DIR}/${BIN_NAME}" version 2>/dev/null || echo "frpcmgrd ${VERSION}")"
+log "════════════ 完成，回「概览 / 控制」页点「启动」即可运行 ════════════"
