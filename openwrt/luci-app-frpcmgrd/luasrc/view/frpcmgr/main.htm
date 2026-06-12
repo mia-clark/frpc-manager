@@ -4,7 +4,7 @@
 	/* 作用域全部收敛到 .fmx，既不污染 LuCI 其它页面，又以特异性压过主题(Argon)对 h2/h3/button/input 的改写 */
 
 	/* 根容器：作为 #maincontent>.container(flex 列) 的唯一子项，隔离主题 flex/gap */
-	.fmx{max-width:980px;display:block;color:var(--text-color,#333)}
+	.fmx{display:block;color:var(--text-color,#333)}
 	.fmx *{box-sizing:border-box}
 
 	/* 标题（自管，不用 h2 以免被主题渲染成卡片） */
@@ -40,7 +40,7 @@
 	.fmx .fm-on{background:#dcfce7;color:#166534}.fmx .fm-off{background:#fee2e2;color:#991b1b}.fmx .fm-warn{background:#fef3c7;color:#92400e}
 
 	/* 表单 */
-	.fmx .fm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px 20px;max-width:800px}
+	.fmx .fm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px 20px}
 	.fmx .fm-field{display:flex;flex-direction:column;min-width:0}
 	.fmx .fm-field.full{grid-column:1/-1}
 	.fmx .fm-field label{font-size:13px;margin:0 0 6px;opacity:.85;font-weight:500}
