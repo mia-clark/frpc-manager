@@ -12,7 +12,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.47.0
-	github.com/shirou/gopsutil/v4 v4.26.4
+	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/studio-b12/gowebdav v0.12.0
 	golang.org/x/net v0.53.0
 	gopkg.in/ini.v1 v1.67.2
