@@ -21,6 +21,8 @@ type Uploader interface {
 	// Put stores data at the relative key (overwriting), creating parent
 	// directories where the backend requires them (WebDAV).
 	Put(ctx context.Context, key string, data []byte) error
+	// Get downloads the object at the relative key.
+	Get(ctx context.Context, key string) ([]byte, error)
 	// List returns every object under the relative prefix (recursive).
 	List(ctx context.Context, prefix string) ([]Object, error)
 	// Delete removes the object at the relative key.

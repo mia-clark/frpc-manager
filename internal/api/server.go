@@ -67,7 +67,7 @@ func NewRouter(d Deps) http.Handler {
 	nat := NewNatholeHandler()
 	upd := NewUpdateHandler(d.Cfg.DataDir, rc.SelfUpdateEnabled, d.Logger)
 	syscfg := NewSysConfigHandler(rc, d.Logger)
-	bkp := NewBackupHandler(d.Manager, d.Backup, d.Logger)
+	bkp := NewBackupHandler(d.Manager, d.Backup, imex.RestoreFromZipBytes, d.Logger)
 
 	// Authenticated subtree.
 	r.Group(func(r chi.Router) {
@@ -86,6 +86,8 @@ func NewRouter(d Deps) http.Handler {
 		r.Put("/api/v1/backup/channels/{id}", bkp.UpdateChannel)
 		r.Delete("/api/v1/backup/channels/{id}", bkp.DeleteChannel)
 		r.Post("/api/v1/backup/channels/{id}/test", bkp.TestChannel)
+		r.Get("/api/v1/backup/channels/{id}/objects", bkp.ListObjects)
+		r.Post("/api/v1/backup/channels/{id}/restore", bkp.Restore)
 		r.Get("/api/v1/backup/schedules", bkp.ListSchedules)
 		r.Post("/api/v1/backup/schedules", bkp.CreateSchedule)
 		r.Put("/api/v1/backup/schedules/{id}", bkp.UpdateSchedule)

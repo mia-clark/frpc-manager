@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,20 +14,29 @@ import (
 	"github.com/mia-clark/frpc-manager/internal/manager"
 )
 
-// testTimeout bounds a channel connectivity test.
-const testTimeout = 20 * time.Second
+// Timeouts for channel operations.
+const (
+	testTimeout    = 20 * time.Second
+	listTimeout    = 30 * time.Second
+	restoreTimeout = 5 * time.Minute
+)
+
+// maxBrowseObjects caps how many backup objects a browse returns.
+const maxBrowseObjects = 500
 
 // BackupHandler implements /api/v1/backup/* — storage channels, schedules and
 // run history for the scheduled-backup subsystem.
 type BackupHandler struct {
-	m     *manager.Manager
-	sched *backup.Scheduler
-	log   *slog.Logger
+	m       *manager.Manager
+	sched   *backup.Scheduler
+	restore func([]byte) (map[string]any, error) // restore configs+meta from a zip blob
+	log     *slog.Logger
 }
 
-// NewBackupHandler wires the handler. sched must be non-nil.
-func NewBackupHandler(m *manager.Manager, sched *backup.Scheduler, log *slog.Logger) *BackupHandler {
-	return &BackupHandler{m: m, sched: sched, log: log}
+// NewBackupHandler wires the handler. sched must be non-nil; restore restores an
+// /export/all zip blob (shared with the import handler).
+func NewBackupHandler(m *manager.Manager, sched *backup.Scheduler, restore func([]byte) (map[string]any, error), log *slog.Logger) *BackupHandler {
+	return &BackupHandler{m: m, sched: sched, restore: restore, log: log}
 }
 
 // ---- response views (secrets masked) ----
@@ -237,6 +247,92 @@ func (h *BackupHandler) runTest(w http.ResponseWriter, r *http.Request, ch backu
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ListObjects GET /backup/channels/{id}/objects?prefix= — browse the .zip
+// backups that actually exist on the channel (newest first), so an operator can
+// pick one to restore. This hits the remote storage, unlike /backup/runs which
+// is the host-local execution log.
+func (h *BackupHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
+	ch, ok := h.m.GetBackupChannel(pathID(r))
+	if !ok {
+		WriteError(w, http.StatusNotFound, CodeNotFound, "渠道不存在", nil)
+		return
+	}
+	up, err := backup.NewUploader(ch)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "渠道配置无效："+err.Error(), nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), listTimeout)
+	defer cancel()
+	objs, err := up.List(ctx, r.URL.Query().Get("prefix"))
+	if err != nil {
+		WriteError(w, http.StatusBadGateway, CodeUpstreamFailure, "列举备份失败："+err.Error(), nil)
+		return
+	}
+	zips := make([]backup.Object, 0, len(objs))
+	for _, o := range objs {
+		if strings.HasSuffix(o.Key, ".zip") {
+			zips = append(zips, o)
+		}
+	}
+	sort.Slice(zips, func(i, j int) bool { return zips[i].Modified.After(zips[j].Modified) })
+	truncated := false
+	if len(zips) > maxBrowseObjects {
+		zips = zips[:maxBrowseObjects]
+		truncated = true
+	}
+	out := make([]map[string]any, 0, len(zips))
+	for _, o := range zips {
+		out = append(out, map[string]any{
+			"key":      o.Key,
+			"size":     o.Size,
+			"modified": o.Modified.Unix(),
+		})
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"objects": out, "truncated": truncated})
+}
+
+// Restore POST /backup/channels/{id}/restore {key} — download a backup object
+// from the channel and restore configs + meta from it (same effect as importing
+// that zip via /import/zip).
+func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
+	ch, ok := h.m.GetBackupChannel(pathID(r))
+	if !ok {
+		WriteError(w, http.StatusNotFound, CodeNotFound, "渠道不存在", nil)
+		return
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Key) == "" {
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "key 必填", nil)
+		return
+	}
+	up, err := backup.NewUploader(ch)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "渠道配置无效："+err.Error(), nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), restoreTimeout)
+	defer cancel()
+	data, err := up.Get(ctx, body.Key)
+	if err != nil {
+		WriteError(w, http.StatusBadGateway, CodeUpstreamFailure, "下载备份失败："+err.Error(), nil)
+		return
+	}
+	res, err := h.restore(data)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, CodeBadRequest, "备份文件无效（不是有效的 zip 备份）", nil)
+		return
+	}
+	h.log.Warn("restored from backup object",
+		slog.String("channel", ch.Name), slog.String("key", body.Key))
+	WriteJSON(w, http.StatusOK, res)
 }
 
 // ---- schedules ----

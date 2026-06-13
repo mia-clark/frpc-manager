@@ -223,6 +223,38 @@ paths:
       summary: Test a stored channel's connectivity
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { '200': { description: 'OK — { ok, error? }' } }
+  /api/v1/backup/channels/{id}/objects:
+    get:
+      tags: [backup]
+      summary: Browse the .zip backups present on the channel (newest first)
+      description: >
+        Lists the actual backup objects on the storage (unlike /backup/runs, the
+        host-local execution log), so an operator can pick one to restore.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: prefix, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: 'OK — { objects: [{ key, size, modified }], truncated }' }
+        '404': { description: Channel not found }
+        '502': { description: List failed }
+  /api/v1/backup/channels/{id}/restore:
+    post:
+      tags: [backup]
+      summary: Download a backup object and restore configs + meta from it
+      description: >
+        Same effect as importing that zip via /import/zip. Overwrites same-named
+        configs; re-applies branding / order / system_config / backup config.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [key], properties: { key: { type: string } } }
+      responses:
+        '200': { description: 'OK — { imported, branding_restored, order_restored, system_config_restored, backup_restored }' }
+        '400': { description: Missing key / invalid zip }
+        '404': { description: Channel not found }
+        '502': { description: Download failed }
   /api/v1/backup/schedules:
     get:
       tags: [backup]

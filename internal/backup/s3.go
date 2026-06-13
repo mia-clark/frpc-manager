@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/minio/minio-go/v7"
@@ -54,6 +55,16 @@ func (u *s3Uploader) Put(ctx context.Context, key string, data []byte) error {
 	_, err := u.cli.PutObject(ctx, u.bucket, full, bytes.NewReader(data), int64(len(data)),
 		minio.PutObjectOptions{ContentType: "application/zip"})
 	return err
+}
+
+func (u *s3Uploader) Get(ctx context.Context, key string) ([]byte, error) {
+	full := joinKey(u.prefix, key)
+	obj, err := u.cli.GetObject(ctx, u.bucket, full, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Close()
+	return io.ReadAll(obj)
 }
 
 func (u *s3Uploader) List(ctx context.Context, prefix string) ([]Object, error) {

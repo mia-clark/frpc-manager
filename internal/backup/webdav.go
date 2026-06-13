@@ -52,6 +52,14 @@ func (u *webdavUploader) Put(_ context.Context, key string, data []byte) error {
 	return nil
 }
 
+func (u *webdavUploader) Get(_ context.Context, key string) ([]byte, error) {
+	data, err := u.cli.Read(u.davPath(key))
+	if err != nil {
+		return nil, fmt.Errorf("读取 WebDAV 对象失败：%w", err)
+	}
+	return data, nil
+}
+
 func (u *webdavUploader) List(_ context.Context, prefix string) ([]Object, error) {
 	raw, err := u.walk(u.davPath(prefix))
 	if err != nil {

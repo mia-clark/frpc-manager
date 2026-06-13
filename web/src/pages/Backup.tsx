@@ -3,6 +3,8 @@ import {
   App,
   Button,
   Card,
+  Drawer,
+  Empty,
   Form,
   Input,
   InputNumber,
@@ -18,12 +20,14 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import {
   CloudUploadOutlined,
+  CloudDownloadOutlined,
   PlusOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
   ExperimentOutlined,
   EditOutlined,
   DeleteOutlined,
+  RollbackOutlined,
 } from '@ant-design/icons';
 import {
   listChannels,
@@ -39,9 +43,12 @@ import {
   deleteSchedule,
   toggleSchedule,
   runSchedule,
+  listChannelObjects,
+  restoreFromChannel,
   type BackupChannel,
   type BackupSchedule,
   type BackupRun,
+  type BackupObject,
   type ChannelInput,
   type ChannelKind,
 } from '../api/backup';
@@ -354,6 +361,113 @@ const Backup: React.FC = () => {
     });
   };
 
+  // ---------- 从备份恢复（独立抽屉，低频功能）----------
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreChannel, setRestoreChannel] = useState<string | undefined>(undefined);
+  const [restoreObjects, setRestoreObjects] = useState<BackupObject[]>([]);
+  const [restoreLoading, setRestoreLoading] = useState(false);
+  const [restoreTruncated, setRestoreTruncated] = useState(false);
+  const [restoringKey, setRestoringKey] = useState<string | null>(null);
+
+  const loadRestoreObjects = useCallback(async (channelId: string) => {
+    setRestoreLoading(true);
+    setRestoreObjects([]);
+    try {
+      const r = await listChannelObjects(channelId);
+      setRestoreObjects(r.objects);
+      setRestoreTruncated(r.truncated);
+    } catch (e) {
+      message.error('拉取备份列表失败：' + errMsg(e));
+    } finally {
+      setRestoreLoading(false);
+    }
+  }, [message]);
+
+  const openRestore = () => {
+    if (channels.length === 0) {
+      message.warning('请先添加至少一个存储渠道');
+      return;
+    }
+    const ch = restoreChannel && channels.some((c) => c.id === restoreChannel) ? restoreChannel : channels[0].id;
+    setRestoreChannel(ch);
+    setRestoreOpen(true);
+    void loadRestoreObjects(ch);
+  };
+
+  const onRestore = (obj: BackupObject) => {
+    if (!restoreChannel) return;
+    modal.confirm({
+      title: '从此备份恢复？',
+      width: 520,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <Paragraph style={{ marginBottom: 8 }}>
+            将下载并恢复：<Text code>{obj.key}</Text>
+          </Paragraph>
+          <Paragraph type="warning" style={{ marginBottom: 0 }}>
+            这会<strong>覆盖同名的 FRPC 实例配置</strong>，并恢复品牌 / 系统设置 / 备份渠道与计划；
+            备份中不包含的实例不受影响。建议恢复前先做一次当前配置的导出。
+          </Paragraph>
+        </div>
+      ),
+      okText: '确认恢复',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setRestoringKey(obj.key);
+        try {
+          const r = await restoreFromChannel(restoreChannel, obj.key);
+          const parts: string[] = [`已恢复 ${r.imported.length} 个实例配置`];
+          if (r.branding_restored) parts.push('品牌');
+          if (r.system_config_restored) parts.push('系统设置');
+          if (r.backup_restored) parts.push('备份渠道/计划');
+          message.success(parts.join('，') + '。可到「FRPC 实例」查看');
+          // 备份渠道/计划可能已变，刷新本页数据。
+          await Promise.all([reloadChannels(), reloadSchedules(), reloadRuns()]);
+        } catch (e) {
+          message.error('恢复失败：' + errMsg(e));
+        } finally {
+          setRestoringKey(null);
+        }
+      },
+    });
+  };
+
+  const restoreCols: ColumnsType<BackupObject> = useMemo(
+    () => [
+      {
+        title: '备份文件',
+        dataIndex: 'key',
+        render: (k: string) => (
+          <Text style={{ fontSize: 12, maxWidth: 380 }} ellipsis={{ tooltip: k }} copyable={{ text: k }}>
+            {k}
+          </Text>
+        ),
+      },
+      { title: '大小', dataIndex: 'size', width: 90, render: (n: number) => fmtSize(n) },
+      { title: '时间', dataIndex: 'modified', width: 170, render: (n: number) => fmtTime(n) },
+      {
+        title: '操作',
+        width: 100,
+        render: (_: unknown, o: BackupObject) => (
+          <Button
+            size="small"
+            type="primary"
+            ghost
+            danger
+            icon={<RollbackOutlined />}
+            loading={restoringKey === o.key}
+            onClick={() => onRestore(o)}
+          >
+            恢复
+          </Button>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [restoringKey, restoreChannel]
+  );
+
   // ---------- 表格列 ----------
   const channelCols: ColumnsType<BackupChannel> = useMemo(
     () => [
@@ -500,15 +614,22 @@ const Backup: React.FC = () => {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card styles={{ body: { padding: 18 } }} style={{ borderRadius: 10 }}>
-        <Space direction="vertical" size={4}>
-          <Title level={4} style={{ margin: 0 }}>
-            <CloudUploadOutlined /> 定时备份
-          </Title>
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            配置存储渠道（S3 / WebDAV），再设定定时计划，把全部配置自动打包上传到云端。渠道与计划存于服务端，
-            重启 / 更新 / 备份还原都不丢失。
-          </Text>
-        </Space>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+          <Space direction="vertical" size={4}>
+            <Title level={4} style={{ margin: 0 }}>
+              <CloudUploadOutlined /> 定时备份
+            </Title>
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              配置存储渠道（S3 / WebDAV），再设定定时计划，把全部配置自动打包上传到云端。渠道与计划存于服务端，
+              重启 / 更新 / 备份还原都不丢失。
+            </Text>
+          </Space>
+          <Tooltip title="从某个渠道上已有的备份文件里挑一个，一键恢复配置">
+            <Button icon={<CloudDownloadOutlined />} onClick={openRestore}>
+              从备份恢复…
+            </Button>
+          </Tooltip>
+        </div>
       </Card>
 
       <Card
@@ -704,6 +825,59 @@ const Backup: React.FC = () => {
           </Paragraph>
         </Form>
       </Modal>
+
+      {/* 从备份恢复（独立抽屉） */}
+      <Drawer
+        title={<Space><CloudDownloadOutlined /> 从备份恢复</Space>}
+        width={680}
+        open={restoreOpen}
+        onClose={() => setRestoreOpen(false)}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            这里直接读取所选渠道上<strong>实际存在的备份文件</strong>（与下方「备份历史」的本机执行记录不同）。
+            挑一个点「恢复」，会下载该备份并还原配置。
+          </Text>
+          <Space wrap>
+            <Select
+              style={{ minWidth: 260 }}
+              value={restoreChannel}
+              onChange={(v) => {
+                setRestoreChannel(v);
+                void loadRestoreObjects(v);
+              }}
+              options={channels.map((c) => ({
+                value: c.id,
+                label: `${c.name}（${c.kind === 's3' ? 'S3' : 'WebDAV'}）`,
+              }))}
+            />
+            <Button
+              icon={<ReloadOutlined />}
+              loading={restoreLoading}
+              onClick={() => restoreChannel && loadRestoreObjects(restoreChannel)}
+            >
+              刷新
+            </Button>
+          </Space>
+          {restoreTruncated && (
+            <Text type="warning" style={{ fontSize: 12 }}>
+              备份较多，仅显示最近 500 个。
+            </Text>
+          )}
+          <Table
+            rowKey="key"
+            size="small"
+            loading={restoreLoading}
+            columns={restoreCols}
+            dataSource={restoreObjects}
+            pagination={{ pageSize: 12, hideOnSinglePage: true }}
+            locale={{
+              emptyText: <Empty description="该渠道上还没有备份文件（或路径前缀下为空）" />,
+            }}
+          />
+        </Space>
+      </Drawer>
     </Space>
   );
 };

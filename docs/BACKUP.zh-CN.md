@@ -118,6 +118,8 @@ frpcmgr-backups/每日/2026/06/frpcmgr-20260613-030005.zip
 | `DELETE /backup/channels/{id}` | 删除渠道（被计划引用则 409） |
 | `POST /backup/channels/{id}/test` | 测试连通性（S3 BucketExists / WebDAV stat 根） |
 | `POST /backup/channels/test` | 测试一份未保存的渠道配置 |
+| `GET /backup/channels/{id}/objects` | 浏览渠道上实际存在的 `.zip` 备份（最新在前，恢复用） |
+| `POST /backup/channels/{id}/restore` | 下载某备份对象并恢复配置（`{key}`，复用 import 逻辑） |
 | `GET /backup/schedules` | 列备份计划（含 last_run 摘要） |
 | `POST /backup/schedules` | 新建计划 |
 | `PUT /backup/schedules/{id}` | 更新计划 |

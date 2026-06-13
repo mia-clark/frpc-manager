@@ -120,17 +120,29 @@ func (h *ImportExportHandler) ImportZIP(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusBadRequest, CodeBadRequest, "read upload: "+err.Error(), nil)
 		return
 	}
-	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	res, err := h.RestoreFromZipBytes(body)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, CodeBadRequest, "not a valid zip: "+err.Error(), nil)
 		return
+	}
+	WriteJSON(w, http.StatusOK, res)
+}
+
+// RestoreFromZipBytes restores configs + meta from an /export/all zip given as
+// raw bytes. Shared by the multipart /import/zip upload and the "restore from a
+// backup channel" flow. Returns the per-field restore summary; the only hard
+// error is a non-zip payload.
+func (h *ImportExportHandler) RestoreFromZipBytes(body []byte) (map[string]any, error) {
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		return nil, err
 	}
 	imported := []string{}
 	var metaRaw []byte
 	for _, zf := range zr.File {
 		name := filepath.Base(zf.Name)
-		// meta.json carries the operator branding (see ExportAll) — capture it
-		// and re-apply after the configs are in place.
+		// meta.json carries branding / order / system_config / backup config —
+		// capture it and re-apply after the configs are in place.
 		if name == "meta.json" {
 			if rc, err := zf.Open(); err == nil {
 				metaRaw, _ = io.ReadAll(io.LimitReader(rc, 4<<20))
@@ -161,7 +173,6 @@ func (h *ImportExportHandler) ImportZIP(w http.ResponseWriter, r *http.Request) 
 
 	brandingRestored, orderRestored, systemConfigRestored, backupRestored := false, false, false, false
 	if len(metaRaw) > 0 {
-		var err error
 		if brandingRestored, orderRestored, systemConfigRestored, backupRestored, err = h.m.ImportMeta(metaRaw); err != nil {
 			h.log.Warn("restore meta from import failed", slog.Any("err", err))
 		}
@@ -172,13 +183,13 @@ func (h *ImportExportHandler) ImportZIP(w http.ResponseWriter, r *http.Request) 
 			h.log.Warn("reload backup scheduler after import failed", slog.Any("err", err))
 		}
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"imported":               imported,
 		"branding_restored":      brandingRestored,
 		"order_restored":         orderRestored,
 		"system_config_restored": systemConfigRestored,
 		"backup_restored":        backupRestored,
-	})
+	}, nil
 }
 
 // ExportConfig serves the raw config bytes as a download.

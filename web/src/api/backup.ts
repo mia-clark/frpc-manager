@@ -172,3 +172,36 @@ export async function listRuns(limit = 50): Promise<BackupRun[]> {
   const r = await client.get<{ runs: BackupRun[] }>(`/api/v1/backup/runs?limit=${limit}`);
   return r.data.runs || [];
 }
+
+// ---- restore from a channel's actual backup objects ----
+
+/** A real backup file present on the storage channel (not the local run log). */
+export interface BackupObject {
+  key: string;
+  size: number;
+  modified: number;
+}
+
+export interface RestoreResult {
+  imported: string[];
+  branding_restored: boolean;
+  order_restored: boolean;
+  system_config_restored: boolean;
+  backup_restored: boolean;
+}
+
+export async function listChannelObjects(
+  id: string,
+  prefix?: string
+): Promise<{ objects: BackupObject[]; truncated: boolean }> {
+  const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+  const r = await client.get<{ objects: BackupObject[]; truncated: boolean }>(
+    `/api/v1/backup/channels/${id}/objects${q}`
+  );
+  return { objects: r.data.objects || [], truncated: !!r.data.truncated };
+}
+
+export async function restoreFromChannel(id: string, key: string): Promise<RestoreResult> {
+  const r = await client.post<RestoreResult>(`/api/v1/backup/channels/${id}/restore`, { key });
+  return r.data;
+}
