@@ -70,7 +70,10 @@ func (u *webdavUploader) List(_ context.Context, prefix string) ([]Object, error
 	for _, o := range raw {
 		rel := strings.TrimPrefix(o.Key, base)
 		rel = strings.TrimPrefix(rel, "/")
-		out = append(out, Object{Key: rel, Size: o.Size})
+		// 必须带上 Modified：walk() 已从 PROPFIND 取到 ModTime，这里重组 Object
+		// 裁剪 prefix 时若漏掉它，o.Modified 会退化成 time.Time{} 零值，
+		// 经 API 的 .Unix() 变成负数，前端渲染成 0001-01-01（上海 LMT → 1/1/1 08:05:43）。
+		out = append(out, Object{Key: rel, Size: o.Size, Modified: o.Modified})
 	}
 	return out, nil
 }
