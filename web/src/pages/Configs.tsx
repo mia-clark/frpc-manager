@@ -439,6 +439,9 @@ const Configs: React.FC = () => {
         client.get(`/api/v1/configs/${id}`),
       ]);
       const snapItems: any[] = snapResp.data?.items || [];
+      // 顺手缓存完整实例配置：规则抽屉里的 vnet 提示要据此显示本机虚拟地址
+      // （/proxies tab 不会触发 loadVisualConfig，否则 detailConfig 会是空/过期）。
+      setDetailConfig(envResp.data);
       const fullProxies: any[] = envResp.data?.config?.proxies || [];
       const fullVisitors: any[] = envResp.data?.config?.visitors || [];
       const proxyByName = new Map(fullProxies.map((p: any) => [p.name, p]));
@@ -2371,14 +2374,26 @@ const Configs: React.FC = () => {
                     </Form.Item>
                     <Form.Item noStyle shouldUpdate={(p, c) => p.visitorPlugin !== c.visitorPlugin}>
                       {({ getFieldValue }) => getFieldValue('visitorPlugin') === 'virtual_net' ? (
-                        <Form.Item
-                          label="目标虚拟 IP destinationIP"
-                          name="destinationIP"
-                          rules={[{ required: true, message: '请输入对端节点的虚拟 IP' }]}
-                          tooltip="对端节点在虚拟网络中的地址（单个 IP，非网段），如 100.86.0.1；选中后 bindPort 会自动设为 -1。"
-                        >
-                          <Input placeholder="100.86.0.1" />
-                        </Form.Item>
+                        <>
+                          <Alert
+                            type={detailConfig?.config?.featureGates?.VirtualNet && detailConfig?.config?.virtualNet?.address ? 'info' : 'warning'}
+                            showIcon
+                            style={{ margin: '8px 0 12px' }}
+                            message={
+                              detailConfig?.config?.featureGates?.VirtualNet && detailConfig?.config?.virtualNet?.address
+                                ? <span>本机虚拟地址：<b>{detailConfig.config.virtualNet.address}</b> ✓（已在常规配置开启）</span>
+                                : <span>⚠️ 本机<b>尚未开启虚拟网络或未设置地址</b>，请先到「常规配置 → 组网 (VNet)」开启并填写本机虚拟地址，否则本访客无法接入组网。</span>
+                            }
+                          />
+                          <Form.Item
+                            label="目标虚拟 IP destinationIP"
+                            name="destinationIP"
+                            rules={[{ required: true, message: '请输入对端节点的虚拟 IP' }]}
+                            tooltip="对端节点在虚拟网络中的地址（单个 IP，非网段），如 100.86.0.1；选中后 bindPort 会自动设为 -1。"
+                          >
+                            <Input placeholder="100.86.0.1" />
+                          </Form.Item>
+                        </>
                       ) : null}
                     </Form.Item>
                   </div>
@@ -2600,15 +2615,19 @@ const Configs: React.FC = () => {
                   )}
                   {p === 'virtual_net' && (
                     <Alert
-                      type="info"
+                      type={detailConfig?.config?.featureGates?.VirtualNet && detailConfig?.config?.virtualNet?.address ? 'info' : 'warning'}
                       showIcon
                       style={{ marginBottom: 12 }}
                       message="组网网关 (vnet · 实验性)"
                       description={
                         <span>
+                          {detailConfig?.config?.featureGates?.VirtualNet && detailConfig?.config?.virtualNet?.address ? (
+                            <div style={{ marginBottom: 6 }}>本机虚拟地址：<b>{detailConfig.config.virtualNet.address}</b> ✓（已在常规配置开启）</div>
+                          ) : (
+                            <div style={{ marginBottom: 6 }}>⚠️ 本机<b>尚未开启虚拟网络或未设置地址</b>，请先到「常规配置 → 组网 (VNet)」开启 VirtualNet 并填写本机虚拟地址，否则本规则无法生效。</div>
+                          )}
                           本代理把当前节点作为虚拟网络的<b>被访问端</b>。请选择 <b>STCP</b> 类型并设置<b>共享密钥</b>；
-                          对端用「访客 + virtual_net + 目标虚拟 IP」即可访问本节点。
-                          需先在「常规配置 → 组网 (VNet)」开启 VirtualNet 并设置本机虚拟地址。仅支持 Linux/macOS。
+                          对端用「访客 + virtual_net + 目标虚拟 IP」即可访问本节点。仅支持 Linux/macOS。
                         </span>
                       }
                     />
